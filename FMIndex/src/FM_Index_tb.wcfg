@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wave_config>
+   <wave_state>
+   </wave_state>
+   <db_ref_list>
+      <db_ref path="FM_Index_tb_behav.wdb" id="1">
+         <top_modules>
+            <top_module name="FM_Index_tb" />
+         </top_modules>
+      </db_ref>
+   </db_ref_list>
+   <zoom_setting>
+      <ZoomStartTime time="0.000000 us"></ZoomStartTime>
+      <ZoomEndTime time="2.007143 us"></ZoomEndTime>
+      <Cursor1Time time="1.000000 us"></Cursor1Time>
+   </zoom_setting>
+   <column_width_setting>
+      <NameColumnWidth column_width="185"></NameColumnWidth>
+      <ValueColumnWidth column_width="115"></ValueColumnWidth>
+   </column_width_setting>
+   <WVObjectSize size="14" />
+   <wvobject fp_name="group25" type="group">
+      <obj_property name="label">ignore</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+      <wvobject fp_name="/FM_Index_tb/clk" type="logic">
+         <obj_property name="ElementShortName">clk</obj_property>
+         <obj_property name="ObjectShortName">clk</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/reset" type="logic">
+         <obj_property name="ElementShortName">reset</obj_property>
+         <obj_property name="ObjectShortName">reset</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/start" type="logic">
+         <obj_property name="ElementShortName">start</obj_property>
+         <obj_property name="ObjectShortName">start</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/pattern" type="array">
+         <obj_property name="ElementShortName">pattern[23:0]</obj_property>
+         <obj_property name="ObjectShortName">pattern[23:0]</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/pat_len_in" type="other">
+         <obj_property name="ElementShortName">pat_len_in</obj_property>
+         <obj_property name="ObjectShortName">pat_len_in</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/done" type="logic">
+         <obj_property name="ElementShortName">done</obj_property>
+         <obj_property name="ObjectShortName">done</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/fail" type="logic">
+         <obj_property name="ElementShortName">fail</obj_property>
+         <obj_property name="ObjectShortName">fail</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/l_out" type="array">
+         <obj_property name="ElementShortName">l_out[3:0]</obj_property>
+         <obj_property name="ObjectShortName">l_out[3:0]</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/r_out" type="array">
+         <obj_property name="ElementShortName">r_out[3:0]</obj_property>
+         <obj_property name="ObjectShortName">r_out[3:0]</obj_property>
+      </wvobject>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/clk_tb" type="logic">
+      <obj_property name="ElementShortName">clk_tb</obj_property>
+      <obj_property name="ObjectShortName">clk_tb</obj_property>
+   </wvobject>
+   <wvobject type="divider" fp_name="divider36">
+      <obj_property name="label">Inputs</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+      <obj_property name="BkColor">#FAAFBE</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/reset_tb" type="logic">
+      <obj_property name="ElementShortName">reset_tb</obj_property>
+      <obj_property name="ObjectShortName">reset_tb</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/start_tb" type="logic">
+      <obj_property name="ElementShortName">start_tb</obj_property>
+      <obj_property name="ObjectShortName">start_tb</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/pattern_tb" type="array">
+      <obj_property name="ElementShortName">pattern_tb[23:0]</obj_property>
+      <obj_property name="ObjectShortName">pattern_tb[23:0]</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/pat_len_in_tb" type="other">
+      <obj_property name="ElementShortName">pat_len_in_tb</obj_property>
+      <obj_property name="ObjectShortName">pat_len_in_tb</obj_property>
+   </wvobject>
+   <wvobject type="divider" fp_name="divider38">
+      <obj_property name="label">Outputs</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+      <obj_property name="BkColor">#800080</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/done_tb" type="logic">
+      <obj_property name="ElementShortName">done_tb</obj_property>
+      <obj_property name="ObjectShortName">done_tb</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/fail_tb" type="logic">
+      <obj_property name="ElementShortName">fail_tb</obj_property>
+      <obj_property name="ObjectShortName">fail_tb</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/l_out_tb" type="array">
+      <obj_property name="ElementShortName">l_out_tb[3:0]</obj_property>
+      <obj_property name="ObjectShortName">l_out_tb[3:0]</obj_property>
+   </wvobject>
+   <wvobject fp_name="/FM_Index_tb/r_out_tb" type="array">
+      <obj_property name="ElementShortName">r_out_tb[3:0]</obj_property>
+      <obj_property name="ObjectShortName">r_out_tb[3:0]</obj_property>
+   </wvobject>
+   <wvobject type="divider" fp_name="divider26">
+      <obj_property name="label">Constants</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+   </wvobject>
+   <wvobject fp_name="group27" type="group">
+      <obj_property name="label">Constants</obj_property>
+      <obj_property name="DisplayName">label</obj_property>
+      <wvobject fp_name="/FM_Index_tb/TIME_DELTA" type="other">
+         <obj_property name="ElementShortName">TIME_DELTA</obj_property>
+         <obj_property name="ObjectShortName">TIME_DELTA</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/SIGMA" type="other">
+         <obj_property name="ElementShortName">SIGMA</obj_property>
+         <obj_property name="ObjectShortName">SIGMA</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/N" type="other">
+         <obj_property name="ElementShortName">N</obj_property>
+         <obj_property name="ObjectShortName">N</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/PAT_LEN" type="other">
+         <obj_property name="ElementShortName">PAT_LEN</obj_property>
+         <obj_property name="ObjectShortName">PAT_LEN</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/IDX_WIDTH" type="other">
+         <obj_property name="ElementShortName">IDX_WIDTH</obj_property>
+         <obj_property name="ObjectShortName">IDX_WIDTH</obj_property>
+      </wvobject>
+      <wvobject fp_name="/FM_Index_tb/CHAR_WIDTH" type="other">
+         <obj_property name="ElementShortName">CHAR_WIDTH</obj_property>
+         <obj_property name="ObjectShortName">CHAR_WIDTH</obj_property>
+      </wvobject>
+   </wvobject>
+</wave_config>
