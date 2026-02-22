@@ -1,0 +1,5 @@
+target/
+
+# Test sequence and FM-Index
+seq
+seq.fmi
