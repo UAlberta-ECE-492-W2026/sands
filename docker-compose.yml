@@ -1,0 +1,43 @@
+x-buoy-env: &buoy-env
+  ORCA_URL: http://orca:8000
+  ORCA_SHARED_SECRET: sands-shared-secret
+  FMINDEXER_BIN: /usr/local/bin/fmindexer
+
+x-buoy-common: &buoy-common
+  build:
+    context: .
+    dockerfile: buoy/Dockerfile
+  depends_on:
+    - orca
+  volumes:
+    - ./fmindexer.rs/seq.fmi:/fmi/seq.fmi:ro
+
+services:
+  orca:
+    build:
+      context: .
+      dockerfile: orca/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ORCA_SHARED_SECRET: sands-shared-secret
+      ORCA_DEFAULT_FMI_PATH: /fmi/seq.fmi
+      ORCA_DB_PATH: /data/orca_state.db
+    volumes:
+      - orca-data:/data
+      - ./fmindexer.rs/seq.fmi:/fmi/seq.fmi:ro
+
+  buoy-1:
+    <<: *buoy-common
+    environment:
+      <<: *buoy-env
+      BUOY_ID: buoy-1
+
+  buoy-2:
+    <<: *buoy-common
+    environment:
+      <<: *buoy-env
+      BUOY_ID: buoy-2
+
+volumes:
+  orca-data:
