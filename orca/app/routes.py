@@ -20,8 +20,8 @@ from .state import (
     OrchestratorState,
     enqueue_chunks,
     get_next_chunk_for_session,
-    requeue_expired_chunks_once,
 )
+from .diagnostics import trace_recorder
 
 router = APIRouter()
 
@@ -37,6 +37,17 @@ def _get_db(request: Request) -> DatabaseStore:
 @router.get("/health", tags=["meta"])
 async def health_check() -> dict[str, str]:
     return {"status": "ok", "detail": "orca is ready"}
+
+
+@router.get("/diagnostics/trace", tags=["meta"])
+async def diagnostics_trace(request: Request) -> JSONResponse:
+    recorder = getattr(request.app.state, "trace_recorder", None)
+    if not recorder or not recorder.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="tracing disabled"
+        )
+    events = await recorder.dump_trace()
+    return JSONResponse(content={"traceEvents": events})
 
 
 def _headers(request: Request) -> dict[str, str]:
@@ -129,7 +140,13 @@ async def get_work(session_token: str, request: Request) -> Response | WorkRespo
     if not chunk_payload:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     try:
-        reads = await _get_db(request).fetch_reads_for_chunk(chunk_payload["chunk_id"])
+        async with trace_recorder.span(
+            "routes.get_work.fetch_reads",
+            args={"chunk_id": chunk_payload["chunk_id"]},
+        ):
+            reads = await _get_db(request).fetch_reads_for_chunk(
+                chunk_payload["chunk_id"]
+            )
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="chunk not found"
@@ -147,42 +164,51 @@ async def work_result(request: Request) -> dict[str, str]:
     payload = await request.body()
     verify_signature(_headers(request), payload)
     data = WorkResultRequest.model_validate_json(payload.decode())
-    state = _get_state(request)
-    async with state.lock:
-        chunk = state.chunk_store.get(data.chunk_id)
-        if not chunk:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="unknown chunk"
-            )
-        if chunk.job_id != data.job_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="job mismatch"
-            )
-        if chunk.status != "in_flight":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail="chunk not assigned"
-            )
-        if data.status != "ok":
-            chunk.status = "pending"
+    span = trace_recorder.span(
+        "routes.work_result",
+        args={"chunk_id": data.chunk_id, "job_id": data.job_id},
+    )
+    async with span:
+        state = _get_state(request)
+        async with state.lock:
+            chunk = state.chunk_store.get(data.chunk_id)
+            if not chunk:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="unknown chunk"
+                )
+            if chunk.job_id != data.job_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="job mismatch"
+                )
+            if chunk.status != "in_flight":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="chunk not assigned"
+                )
+            if data.status != "ok":
+                chunk.status = "pending"
+                chunk.assigned_to = None
+                chunk.assigned_at = None
+                state.pending_chunks.append(data.chunk_id)
+                await _get_db(request).update_chunk_assignment(
+                    data.chunk_id, "pending", None
+                )
+                span.args["canceled"] = True
+                span.args["status"] = data.status
+                return {"status": "requeued", "chunk_id": data.chunk_id}
+            chunk.status = "completed"
             chunk.assigned_to = None
             chunk.assigned_at = None
-            state.pending_chunks.append(data.chunk_id)
-            await _get_db(request).update_chunk_assignment(
-                data.chunk_id, "pending", None
+            job = state.jobs.get(data.job_id)
+            if job:
+                job.completed_chunks += 1
+                if job.completed_chunks >= job.total_chunks:
+                    job.status = "complete"
+            await _get_db(request).persist_chunk_result(
+                data.chunk_id, [r.model_dump() for r in data.results], "completed"
             )
-            return {"status": "requeued", "chunk_id": data.chunk_id}
-        chunk.status = "completed"
-        chunk.assigned_to = None
-        chunk.assigned_at = None
-        job = state.jobs.get(data.job_id)
-        if job:
-            job.completed_chunks += 1
-            if job.completed_chunks >= job.total_chunks:
-                job.status = "complete"
-    await _get_db(request).persist_chunk_result(
-        data.chunk_id, [r.model_dump() for r in data.results], "completed"
-    )
-    await _get_db(request).mark_chunk_complete(data.job_id)
+            await _get_db(request).mark_chunk_complete(data.job_id)
+            span.args["status"] = data.status
+            span.args["result_count"] = len(data.results)
     return {"status": "ok", "chunk_id": data.chunk_id}
 
 
