@@ -63,28 +63,50 @@ SHARED_SECRET = config.SHARED_SECRET
 
 
 async def worker_loop() -> None:
+    chunk: dict[str, Any] | None = None
     while True:
         try:
             if not app.state.worker_state.session_token:
                 await register_with_orca()
-            chunk = await fetch_chunk()
+            if chunk is None:
+                chunk = await fetch_chunk()
             if not chunk:
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             logging.info(
                 "processing chunk %s job=%s", chunk["chunk_id"], chunk["job_id"]
             )
-            results = await run_fmindexer_search(
-                chunk["fmi_path"], chunk.get("reads", [])
-            )
-            await submit_results(
-                chunk["chunk_id"],
-                chunk["job_id"],
-                results,
-            )
+            next_chunk_task = asyncio.create_task(fetch_chunk())
+            try:
+                results = await run_fmindexer_search(
+                    chunk["fmi_path"], chunk.get("reads", [])
+                )
+            except Exception:
+                next_chunk_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await next_chunk_task
+                raise
+            chunk_id = chunk["chunk_id"]
+            job_id = chunk["job_id"]
+            submit_task = asyncio.create_task(submit_results(chunk_id, job_id, results))
+
+            def _log_submit_error(
+                task: asyncio.Task, chunk_id: str = chunk_id, job_id: str = job_id
+            ) -> None:
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc:
+                    logging.error(
+                        "submit error chunk %s job=%s: %s", chunk_id, job_id, exc
+                    )
+
+            submit_task.add_done_callback(_log_submit_error)
+            chunk = await next_chunk_task
         except Exception as exc:
             logging.error("worker loop error: %s", exc)
             await asyncio.sleep(POLL_INTERVAL)
+            chunk = None
 
 
 @app.get("/health", tags=["meta"])
