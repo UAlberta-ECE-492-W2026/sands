@@ -32,6 +32,13 @@ class JobInfo:
     chunk_ids: List[str] = field(default_factory=list)
 
 
+@dataclass
+class ChunkEnqueueRequest:
+    job_id: str
+    fmi_path: str
+    reads: List[str]
+
+
 class OrchestratorState:
     def __init__(self) -> None:
         self.pending_chunks: Deque[str] = deque()
@@ -39,6 +46,7 @@ class OrchestratorState:
         self.jobs: Dict[str, JobInfo] = {}
         self.sessions: Dict[str, dict] = {}
         self.lock = asyncio.Lock()
+        self.enqueue_queue: asyncio.Queue[ChunkEnqueueRequest] = asyncio.Queue()
 
 
 async def load_state_from_db(state: OrchestratorState, db: DatabaseStore) -> None:
@@ -90,18 +98,52 @@ async def enqueue_chunks(
         "enqueue_chunks",
         args={"job_id": job_id, "chunk_payload": str(len(reads))},
     ):
+        await state.enqueue_queue.put(
+            ChunkEnqueueRequest(job_id=job_id, fmi_path=fmi_path, reads=reads)
+        )
+
+
+async def _process_chunk_enqueue(
+    state: OrchestratorState,
+    db: DatabaseStore,
+    request: ChunkEnqueueRequest,
+) -> None:
+    async with trace_recorder.span(
+        "enqueue_chunks.worker",
+        tid="state",
+        args={"job_id": request.job_id, "chunk_payload": str(len(request.reads))},
+    ):
+        reads_blob = "\n".join(request.reads)
         async with state.lock:
-            job = state.jobs.setdefault(
-                job_id,
-                JobInfo(job_id=job_id, fmi_path=fmi_path, total_chunks=0, chunk_ids=[]),
-            )
-            job.total_chunks += 1
+            job = state.jobs.get(request.job_id)
+            if not job:
+                job = JobInfo(
+                    job_id=request.job_id,
+                    fmi_path=request.fmi_path,
+                    total_chunks=0,
+                    chunk_ids=[],
+                )
+                state.jobs[request.job_id] = job
             chunk_id = str(uuid.uuid4())
             job.chunk_ids.append(chunk_id)
-            state.chunk_store[chunk_id] = ChunkInfo(job_id=job_id, fmi_path=fmi_path)
+            job.total_chunks = max(job.total_chunks, len(job.chunk_ids))
+            state.chunk_store[chunk_id] = ChunkInfo(
+                job_id=request.job_id, fmi_path=request.fmi_path
+            )
             state.pending_chunks.append(chunk_id)
-        reads_blob = "\n".join(reads)
-        await db.insert_chunk(chunk_id, job_id, reads_blob, fmi_path)
+        await db.insert_chunk(chunk_id, request.job_id, reads_blob, request.fmi_path)
+
+
+async def process_enqueue_queue(state: OrchestratorState, db: DatabaseStore) -> None:
+    while True:
+        try:
+            request = await state.enqueue_queue.get()
+        except asyncio.CancelledError:
+            break
+        try:
+            await _process_chunk_enqueue(state, db, request)
+        finally:
+            state.enqueue_queue.task_done()
 
 
 async def get_next_chunk_for_session(

@@ -17,6 +17,7 @@ from .schema import (
     WorkResultRequest,
 )
 from .state import (
+    JobInfo,
     OrchestratorState,
     enqueue_chunks,
     get_next_chunk_for_session,
@@ -62,7 +63,7 @@ async def shortreads(
     ),
     job_id: Optional[str] = Query(None, description="Optional job identifier"),
     chunk_size: Optional[int] = Query(
-        None, description="Maximum chunk size (default 1000 reads)"
+        None, description="Maximum chunk size (default 100000 reads)"
     ),
 ):
     payload = await request.body()
@@ -77,22 +78,32 @@ async def shortreads(
     num_chunks = (len(reads) + effective_chunk_size - 1) // effective_chunk_size
     job_identifier = job_id or str(uuid.uuid4())
     state = _get_state(request)
-    if job_identifier in state.jobs:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="job already exists"
+    db = _get_db(request)
+    async with state.lock:
+        if job_identifier in state.jobs:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="job already exists"
+            )
+        state.jobs[job_identifier] = JobInfo(
+            job_id=job_identifier, fmi_path=fmi_path, total_chunks=num_chunks
         )
-    await _get_db(request).persist_job(
-        job_identifier, fmi_path, num_chunks, effective_chunk_size
-    )
+    try:
+        await db.persist_job(job_identifier, fmi_path, num_chunks, effective_chunk_size)
+    except Exception:
+        async with state.lock:
+            state.jobs.pop(job_identifier, None)
+        raise
     for i in range(0, len(reads), effective_chunk_size):
         chunk = reads[i : i + effective_chunk_size]
-        await enqueue_chunks(state, _get_db(request), job_identifier, fmi_path, chunk)
-    pending = len(state.pending_chunks)
+        await enqueue_chunks(state, db, job_identifier, fmi_path, chunk)
+    async with state.lock:
+        pending_state = len(state.pending_chunks)
+    pending = pending_state + state.enqueue_queue.qsize()
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
             "job_id": job_identifier,
-            "chunks": len(state.jobs[job_identifier].chunk_ids),
+            "chunks": num_chunks,
             "pending_chunks": pending,
         },
     )
