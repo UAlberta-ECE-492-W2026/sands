@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Bindings to the Orca API."""
 
 import json
 import logging

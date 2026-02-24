@@ -1,54 +1,22 @@
-from __future__ import annotations
-
-import asyncio
-from contextlib import asynccontextmanager, suppress
-from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
-from .config import DB_PATH
-from .db import DatabaseStore
 from .diagnostics import trace_recorder
 from .routes import router
-from .state import (
-    OrchestratorState,
-    load_state_from_db,
-    process_enqueue_queue,
-    requeue_expired_chunks,
-)
+from .state import OrchestratorState
 
 
-def create_app(db_path: str = DB_PATH, enable_requeue_watcher: bool = True) -> FastAPI:
+def create_app(enable_requeue_watcher: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        await app.state.db.init()
         if trace_recorder.enabled:
             await trace_recorder.start()
-        await load_state_from_db(app.state.state, app.state.db)
-        enqueue_worker: Optional[asyncio.Task] = asyncio.create_task(
-            process_enqueue_queue(app.state.state, app.state.db)
-        )
-        app.state.enqueue_worker = enqueue_worker
-        watcher: Optional[asyncio.Task] = None
-        if enable_requeue_watcher:
-            watcher = asyncio.create_task(
-                requeue_expired_chunks(app.state.state, app.state.db)
-            )
-            app.state.chunk_watcher = watcher
         try:
             yield
         finally:
-            if enqueue_worker:
-                enqueue_worker.cancel()
-                with suppress(asyncio.CancelledError):
-                    await enqueue_worker
-            if enable_requeue_watcher and watcher:
-                watcher.cancel()
-                with suppress(asyncio.CancelledError):
-                    await watcher
             if trace_recorder.enabled:
                 await trace_recorder.stop()
-            await app.state.db.close()
 
     app = FastAPI(
         title="orca",
@@ -62,6 +30,7 @@ def create_app(db_path: str = DB_PATH, enable_requeue_watcher: bool = True) -> F
         recorder = getattr(request.app.state, "trace_recorder", None)
         if not recorder or not recorder.enabled:
             return await call_next(request)
+
         span = recorder.span(
             f"{request.method} {request.url.path}",
             tid="request",
@@ -77,7 +46,6 @@ def create_app(db_path: str = DB_PATH, enable_requeue_watcher: bool = True) -> F
             return response
 
     app.include_router(router)
-    app.state.db = DatabaseStore(db_path)
     app.state.state = OrchestratorState()
     app.state.chunk_watcher = None
     app.state.enqueue_worker = None

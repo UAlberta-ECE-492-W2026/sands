@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
@@ -16,6 +14,7 @@ from .orca import (
     submit_results as _submit_results,
 )
 from .state import WorkerState
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -68,11 +67,13 @@ async def worker_loop() -> None:
         try:
             if not app.state.worker_state.session_token:
                 await register_with_orca()
+
             if chunk is None:
                 chunk = await fetch_chunk()
             if not chunk:
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
+
             logging.info(
                 "processing chunk %s job=%s", chunk["chunk_id"], chunk["job_id"]
             )

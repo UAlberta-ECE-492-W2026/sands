@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 import time
-from pathlib import Path
 from typing import Iterator
 
 import pytest
@@ -37,9 +34,9 @@ def _send(
 
 
 @pytest.fixture
-def test_client(tmp_path: Path) -> Iterator[TestClient]:
+def test_client() -> Iterator[TestClient]:
     config.SHARED_SECRET = "test-secret"
-    app = create_app(db_path=str(tmp_path / "state.db"), enable_requeue_watcher=False)
+    app = create_app(enable_requeue_watcher=False)
     with TestClient(app) as client:
         yield client
 

@@ -22,10 +22,8 @@ services:
     environment:
       ORCA_SHARED_SECRET: sands-shared-secret
       ORCA_DEFAULT_FMI_PATH: /fmi/seq.fmi
-      ORCA_DB_PATH: /data/orca_state.db
       ORCA_TRACE_ENABLED: true
     volumes:
-      - orca-data:/data
       - ./fmindexer.rs/seq.fmi:/fmi/seq.fmi:ro
 
   buoy-1:
@@ -39,6 +37,3 @@ services:
     environment:
       <<: *buoy-env
       BUOY_ID: buoy-2
-
-volumes:
-  orca-data:

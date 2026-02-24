@@ -1,7 +1,5 @@
 """CLI for submitting short-read jobs and checking status against Orca."""
 
-from __future__ import annotations
-
 import argparse
 import hmac
 import hashlib
@@ -40,8 +38,6 @@ def submit_command(args: argparse.Namespace) -> None:
     params = {"fmi_path": args.fmi_path}
     if args.chunk_size:
         params["chunk_size"] = str(args.chunk_size)
-    if args.job_id:
-        params["job_id"] = args.job_id
     response = httpx.post(
         f"{args.orca_url}/shortreads",
         content=payload,
@@ -91,7 +87,6 @@ def main() -> None:
     submit_parser.add_argument(
         "--chunk-size", type=int, help="Override chunk size (<=1000)"
     )
-    submit_parser.add_argument("--job-id", help="Optional job identifier")
     submit_parser.set_defaults(handler=submit_command)
 
     status_parser = subparsers.add_parser("status", help="Check job status")

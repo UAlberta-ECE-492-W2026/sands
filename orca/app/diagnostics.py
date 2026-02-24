@@ -1,21 +1,28 @@
-from __future__ import annotations
+"""
+Capture perfetto-compatible traces which can be viewed in perfetto.dev
+
+Usage:
+
+- Wrap your code with a trace_recorder.span
+
+    async with trace_recorder.span("myspan", args={'a': 1}):
+        await dothings()
+
+- Then, when ORCA_TRACE_ENABLED is set, download the captured trace with:
+
+    curl http://localhost:8000/diagnostics/trace >trace.json
+"""
 
 import asyncio
-import os
 import time
 import uuid
 from typing import Any
 
-
-def _parse_bool(value: str | None, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in ("1", "true", "yes", "on")
-
-
-TRACE_ENABLED = _parse_bool(os.environ.get("ORCA_TRACE_ENABLED"), False)
-TRACE_QUEUE_SIZE = int(os.environ.get("ORCA_TRACE_QUEUE_SIZE", "1024"))
-TRACE_PID = os.environ.get("ORCA_TRACE_PID", "orca")
+from .config import (
+    TRACE_ENABLED,
+    TRACE_QUEUE_SIZE,
+    TRACE_PID,
+)
 
 
 class _NullSpan:

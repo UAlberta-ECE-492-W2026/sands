@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
@@ -14,7 +12,6 @@ class RegisterResponse(BaseModel):
     session_token: str
     chunk_size: int
     fmi_path: str
-    pending_chunks: int
 
 
 class WorkResponse(BaseModel):
