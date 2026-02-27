@@ -1,0 +1,10 @@
+.git
+.gitignore
+docs
+venv
+**/venv
+**/__pycache__
+**/*.pyc
+fmindexer.rs/target
+orca/venv
+buoy/venv
