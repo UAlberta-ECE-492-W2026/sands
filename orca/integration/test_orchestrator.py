@@ -49,3 +49,5 @@ def test_register_ready_and_workflow(test_client: TestClient) -> None:
     job_info = test_client.get(f"/jobs/{job_id}")
     data = job_info.json()
     assert data["completed_chunks"] == data["total_chunks"] == 1
+    assert isinstance(data["duration_seconds"], (int, float))
+    assert data["duration_seconds"] >= 0

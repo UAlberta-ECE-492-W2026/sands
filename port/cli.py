@@ -58,9 +58,14 @@ def status_command(args: argparse.Namespace) -> None:
     )
     response.raise_for_status()
     data = response.json()
+    duration = data.pop("duration_seconds", None)
     print("job status:")
     for key, value in data.items():
         print(f"  {key}: {value}")
+    if duration is None:
+        print("  duration: job still running")
+    else:
+        print(f"  duration: {duration:.3f}s")
 
 
 def main() -> None:

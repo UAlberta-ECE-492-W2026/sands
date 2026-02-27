@@ -78,11 +78,14 @@ async def shortreads(
                 status_code=status.HTTP_409_CONFLICT, detail="job already exists"
             )
         state.jobs[job_identifier] = JobInfo(
-            job_id=job_identifier, fmi_path=fmi_path, total_chunks=num_chunks
+            job_id=job_identifier,
+            fmi_path=fmi_path,
+            total_chunks=num_chunks,
+            start_time=time.time(),
         )
 
     for i in range(0, len(reads), effective_chunk_size):
-        chunk = reads[i:i + effective_chunk_size]
+        chunk = reads[i : i + effective_chunk_size]
         await enqueue_chunks(state, job_identifier, fmi_path, chunk)
 
     return JSONResponse(
@@ -130,9 +133,7 @@ async def get_work(session_token: str, request: Request) -> Response | WorkRespo
             status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown session"
         )
 
-    chunk_payload = await get_next_chunk_for_session(
-        state, session_token
-    )
+    chunk_payload = await get_next_chunk_for_session(state, session_token)
     if not chunk_payload:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -183,12 +184,15 @@ async def work_result(request: Request) -> dict[str, str]:
             job.completed_chunks += 1
             if job.completed_chunks >= job.total_chunks:
                 job.status = "complete"
+                job.completion_time = time.time()
 
     return {"status": "ok", "chunk_id": data.chunk_id}
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str, request: Request) -> dict[str, Optional[str | int]]:
+async def get_job(
+    job_id: str, request: Request
+) -> dict[str, Optional[str | int | float]]:
     job_info = _get_state(request).jobs.get(job_id)
     if not job_info:
         raise HTTPException(
@@ -200,4 +204,5 @@ async def get_job(job_id: str, request: Request) -> dict[str, Optional[str | int
         "total_chunks": job_info.total_chunks,
         "completed_chunks": job_info.completed_chunks,
         "status": job_info.status,
+        "duration_seconds": job_info.duration_seconds,
     }

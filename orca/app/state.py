@@ -21,9 +21,17 @@ class JobInfo:
     job_id: str
     fmi_path: str
     total_chunks: int
+    start_time: float
     completed_chunks: int = 0
     status: str = "pending"
     chunk_ids: List[str] = field(default_factory=list)
+    completion_time: Optional[float] = None
+
+    @property
+    def duration_seconds(self) -> Optional[float]:
+        if self.completion_time is None:
+            return None
+        return self.completion_time - self.start_time
 
 
 @dataclass
@@ -71,10 +79,12 @@ async def get_next_chunk_for_session(
             "chunk_id": chunk_id,
             "job_id": next_chunk.job_id,
             "fmi_path": next_chunk.fmi_path,
-            "reads": next_chunk.reads
+            "reads": next_chunk.reads,
         }
 
         async with state.lock:
-            state.chunk_store[chunk_id] = ChunkInfo(job_id=next_chunk.job_id, status="in_flight")
+            state.chunk_store[chunk_id] = ChunkInfo(
+                job_id=next_chunk.job_id, status="in_flight"
+            )
 
         return chunk_payload
