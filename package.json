@@ -1,0 +1,24 @@
+{
+  "name": "sands",
+  "version": "1.0.0",
+  "description": "SoC-Accelerated, Networked DNA Sequencing",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UAlberta-ECE-492-W2026/sands.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/UAlberta-ECE-492-W2026/sands/issues"
+  },
+  "homepage": "https://github.com/UAlberta-ECE-492-W2026/sands#readme",
+  "dependencies": {
+    "aws-cdk": "^2.1110.0"
+  }
+}

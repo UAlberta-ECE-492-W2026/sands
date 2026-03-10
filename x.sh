@@ -14,6 +14,7 @@ Usage:  $0 setup-venv  Setup your local venv
         $0 tests       Run all tests
         $0 check       Typecheck all code
         $0 run-local   Run locally (with docker-compose)
+        $0 infra       Run CDK commands (defaults to synth)
         $0 help        Print this message
 
 EOF
@@ -61,6 +62,9 @@ tests() {
   pushd fmindexer.rs >/dev/null
   test/run.sh
   popd
+
+  header 'Synthesizing CDK stack'
+  cdk_with_args synth
 }
 
 check() {
@@ -89,6 +93,29 @@ check() {
 
 run-local() {
   docker compose up --build "$@"
+}
+
+install-cdk() {
+  npm i
+}
+
+cdk_with_args() {
+  install-cdk
+
+  activate-venv
+  pushd infra >/dev/null
+  pip install -r requirements.txt
+  npx cdk "$@"
+  popd >/dev/null
+}
+
+infra() {
+  header 'CDK infrastructure'
+  if [[ "$#" == 0 ]]; then
+    cdk_with_args synth
+  else
+    cdk_with_args "$@"
+  fi
 }
 
 if [[ "$#" == 0 ]]; then
