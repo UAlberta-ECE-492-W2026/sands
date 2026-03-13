@@ -1,0 +1,12 @@
+--binary 
+test.sv 
+test_tb.sv 
+--assert
+-Wno-fatal
+--trace
+--trace-fst
+--trace-structs
+--x-initial 
+unique
+--top 
+tb
