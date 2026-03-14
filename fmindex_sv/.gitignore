@@ -1,0 +1,8 @@
+
+obj_dir/
+
+*.f
+
+waveform.vcd
+
+vhdl_old/
