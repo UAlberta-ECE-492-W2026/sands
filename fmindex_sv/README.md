@@ -1,4 +1,5 @@
 This Text file gives the order of commands when compiling the digital logic for simulation.
+
 start: running .sv files through verilator simulation
 end: open the waveform in gtkwave
 
