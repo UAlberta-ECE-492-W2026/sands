@@ -4,14 +4,24 @@
 `define SIGMA 5
 `define N 8
 
-module tb_FM_Index;
+module tb_FM_Index(
+    input logic clk,
 
-logic clk;
-logic reset;
-logic start;
+    input logic reset,
+    input logic start,
 
-logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern;
-int pat_len_in;
+    input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
+    input int pat_len_in,
+    input logic we
+);
+
+// logic clk;
+//logic reset;
+//logic start;
+
+//logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern;
+//int pat_len_in;
+//logic we;
 
 logic done;
 logic fail;
@@ -31,27 +41,31 @@ FM_Index dut (
     .r_out(r_out)
 );
 
+/*
 initial begin
     clk = 0;
     forever #5 clk = ~clk;
 end
+*/
 
-initial begin
-    reset = 1;
-    start = 0;
-    pat_len_in = 2;
-    pattern = {`CHAR_WIDTH'd4, `CHAR_WIDTH'd1, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0};
+//initial begin
+    //reset = 1;
+    //start = 0;
+    //pat_len_in = 0;
+    //pattern = {`CHAR_WIDTH'd4, `CHAR_WIDTH'd1, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0};
+    //pattern = {`CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0, `CHAR_WIDTH'd0};
 
-    #10
 
-    reset = 0;
-    start = 1;
+    //#10
 
-    #10
+    //reset = 0;
+    //start = 1;
 
-    start = 0;
+    //#10
 
-    #200 $finish;
-end
+    //start = 0;
+
+    //#200 $finish;
+//end
 
 endmodule

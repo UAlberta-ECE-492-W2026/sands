@@ -11,6 +11,7 @@ module FM_Index (
 
     input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
     input int pat_len_in,
+    input logic we,
 
     output logic done,
     output logic fail,
@@ -18,6 +19,8 @@ module FM_Index (
     output logic [`IDX_WIDTH-1:0] l_out,
     output logic [`IDX_WIDTH-1:0] r_out
 );
+
+logic [`CHAR_WIDTH*`PAT_LEN-1:0] mem;
 
 typedef enum logic [3:0] {
     IDLE,
@@ -68,6 +71,11 @@ logic [`IDX_WIDTH-1:0] Occ [0:`SIGMA-1][0:`N] = {
 };
 
 always_ff @(posedge clk) begin
+    if (we)
+        mem <= pattern;
+end
+
+always_ff @(posedge clk) begin
     if (reset) begin
         state <= IDLE;
         done <= 0;
@@ -89,28 +97,33 @@ always_ff @(posedge clk) begin
                 r <= `IDX_WIDTH'd`N;
                 pat_idx <= `PAT_LEN - 1;
                 state <= READ_CHAR;
+                $display("INIT\n");
             end
 
             READ_CHAR: begin
                 c <= pattern[pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
                 loop_count <= loop_count - 1;
                 state <= RANK_L_S;
+                $display("READ_CHAR\n");
             end
 
             RANK_L_S: begin
                 rank_l <= Occ[c][l];
                 state <= RANK_R_S;
+                $display("RANK_L_S\n");
             end
 
             RANK_R_S: begin
                 rank_r <= Occ[c][r];
                 state <= UPDATE;
+                $display("RANK_R_S\n");
             end
 
             UPDATE: begin
                 l <= C_arr[c] + rank_l;
                 r <= C_arr[c] + rank_r;
                 state <= CHECK;
+                $display("UPDATE\n");
             end
 
             CHECK: begin
@@ -122,16 +135,21 @@ always_ff @(posedge clk) begin
                     pat_idx <= pat_idx - 1;
                     state <= READ_CHAR;
                 end
+                $display("CHECK\n");
             end
             
             DONE_S: begin
                 done <= 1;
                 state <= IDLE;
+                $display("DONE_S\n");
+                $display("l_out: %0d\n", l);
+                $display("l_out: %0d\n", r);
             end
 
             FAIL_S: begin
                 fail <= 1;
                 state <= IDLE;
+                $display("FAIL_S\n");
             end
 
             default: begin
