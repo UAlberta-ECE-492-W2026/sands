@@ -1,10 +1,22 @@
+'''
+writer.py
+
+This file is for testing purposes only.
+
+- writes to the file that simulates the data in memory
+- run during verilator simulation to send data to simulation
+
+> python3 writer.py
+'''
+
 import struct
 import time
 
 pipe = open("mem_pipe", "wb")
 
 i = 0
-# while True:
+
+# send 2 data packets to memory
 while (i < 2):
     i += 1
     pat_len = 2

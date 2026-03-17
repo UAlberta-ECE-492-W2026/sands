@@ -15,14 +15,6 @@ module tb_FM_Index(
     input logic we
 );
 
-// logic clk;
-//logic reset;
-//logic start;
-
-//logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern;
-//int pat_len_in;
-//logic we;
-
 logic done;
 logic fail;
 
@@ -40,6 +32,8 @@ FM_Index dut (
     .l_out(l_out),
     .r_out(r_out)
 );
+
+// OLD SIMULATION DATA (preserved for reference)
 
 /*
 initial begin
