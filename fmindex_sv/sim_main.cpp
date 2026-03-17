@@ -5,6 +5,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <iostream>
+#include <cstdio>
+#include <string>
+#include <fstream>
+
 
 vluint64_t main_time = 0;
 
@@ -20,6 +25,25 @@ double sc_time_stamp() {
 }
 
 int main(int argc, char **argv) {
+
+    // STEP 1: if old PIPE existed, delete it
+    const char* file = "mem_pipe";
+
+    if (std::remove(file) == 0) {
+        printf("old pipe deleted\n");
+    } else {
+        printf("error deleting old pipe or old pipe does not exist\n");
+    }
+
+    // STEP 2: create new pipe file
+    std::ofstream MyFile(file);
+
+    if (!MyFile.is_open()) {
+        printf("Error creating file");
+        return 1;
+    }
+
+    MyFile.close();
 
     Verilated::commandArgs(argc, argv);
     Vtb_FM_Index* top = new Vtb_FM_Index;
