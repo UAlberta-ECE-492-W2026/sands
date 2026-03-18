@@ -10,7 +10,7 @@ verilator -Wall --trace --cc <module>.sv <test bench>.sv --exe sim_main.cpp --ti
 make -C obj_dir -f V<top_module>.mk
 
 # step 3:
-./obj_dir/<top_mopdule>  # exclude extension
+./obj_dir/V<top_mopdule>  # exclude extension
 
 # step 4:
 gtkwave waveform.vcd &
