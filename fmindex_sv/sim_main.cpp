@@ -1,4 +1,4 @@
-#include "Vtb_FM_Index.h"
+#include "Vtop.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
     // STEP 3: setup verilator simulation
     // STEP 3.1: innitialize verilator sim and memory pipe
     Verilated::commandArgs(argc, argv);
-    Vtb_FM_Index* top = new Vtb_FM_Index;
+    auto* top = new Vtop;
 
     int pipe_fd = open("mem_pipe", O_RDONLY);
 

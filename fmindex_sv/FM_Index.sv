@@ -13,6 +13,9 @@ module FM_Index (
     input int pat_len_in,
     input logic we,
 
+    input logic [32:0] ram_data,
+    output logic [32:0] ram_addr,
+
     output logic done,
     output logic fail,
 
@@ -27,8 +30,11 @@ typedef enum logic [3:0] {
     INIT,
     READ_CHAR,
     RANK_L_S,
+    RANK_L_S_LOAD,
     RANK_R_S,
+    RANK_R_S_LOAD,
     UPDATE,
+    UPDATE_LOAD,
     CHECK,
     DONE_S,
     FAIL_S
@@ -42,6 +48,23 @@ logic [`IDX_WIDTH-1:0] rank_l;
 logic [`IDX_WIDTH-1:0] rank_r;
 
 logic [`CHAR_WIDTH-1:0] c;
+
+function logic [32:0] occ_addr(
+    input logic [32:0] column,
+    input logic [32:0] row
+);
+    begin
+        occ_addr = row * 5 + column + 5;
+    end
+endfunction
+
+function logic [32:0] c_arr_addr(
+    input logic [32:0] idx
+);
+    begin
+        c_arr_addr = idx;
+    end
+endfunction
 
 int pat_idx;
 
@@ -57,18 +80,6 @@ int loop_count;
     -- G → 3
     -- T → 4
 */
-
-// C table
-logic [`IDX_WIDTH-1:0] C_arr [0:`SIGMA-1] = {`IDX_WIDTH'd0, `IDX_WIDTH'd1, `IDX_WIDTH'd4, `IDX_WIDTH'd5, `IDX_WIDTH'd6};
-
-// Occ table
-logic [`IDX_WIDTH-1:0] Occ [0:`SIGMA-1][0:`N] = {
-    {`IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0},
-    {`IDX_WIDTH'd0, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd2, `IDX_WIDTH'd2, `IDX_WIDTH'd2, `IDX_WIDTH'd3}, // A
-    {`IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1}, // C
-    {`IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1}, // G
-    {`IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd0, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd1, `IDX_WIDTH'd2, `IDX_WIDTH'd2}  // T
-};
 
 always_ff @(posedge clk) begin
     if (we)
@@ -108,22 +119,46 @@ always_ff @(posedge clk) begin
             end
 
             RANK_L_S: begin
-                rank_l <= Occ[c][l];
-                state <= RANK_R_S;
+                ram_addr <= occ_addr(c, l);
+                state <= RANK_L_S_LOAD;
                 $display("RANK_L_S\n");
             end
 
+            RANK_L_S_LOAD: begin
+                rank_l <= ram_data; // Occ[c][l];
+                state <= RANK_R_S;
+                $display("RANK_L_S_LOAD\n");
+
+                $display("ram[%d] => %d", ram_addr, ram_data);
+            end
+
             RANK_R_S: begin
-                rank_r <= Occ[c][r];
-                state <= UPDATE;
+                ram_addr <= occ_addr(c, r);
+                state <= RANK_R_S_LOAD;
                 $display("RANK_R_S\n");
             end
 
+            RANK_R_S_LOAD: begin
+                rank_r <= ram_data; // Occ[c][r];
+                state <= UPDATE;
+                $display("RANK_R_S_LOAD\n");
+
+                $display("ram[%d] => %d", ram_addr, ram_data);
+            end
+
             UPDATE: begin
-                l <= C_arr[c] + rank_l;
-                r <= C_arr[c] + rank_r;
-                state <= CHECK;
+                ram_addr <= c_arr_addr(c);
+                state <= UPDATE_LOAD;
                 $display("UPDATE\n");
+            end
+
+            UPDATE_LOAD: begin
+                l <= ram_data + rank_l; // C_arr[c] + rank_l;
+                r <= ram_data + rank_r; // C_arr[c] + rank_r;
+                state <= CHECK;
+                $display("UPDATE_LOAD\n");
+
+                $display("ram[%d] => %d", ram_addr, ram_data);
             end
 
             CHECK: begin
@@ -143,7 +178,7 @@ always_ff @(posedge clk) begin
                 state <= IDLE;
                 $display("DONE_S\n");
                 $display("l_out: %0d\n", l);
-                $display("l_out: %0d\n", r);
+                $display("r_out: %0d\n", r);
             end
 
             FAIL_S: begin
