@@ -54,7 +54,7 @@ function logic [32:0] occ_addr(
     input logic [32:0] row
 );
     begin
-        occ_addr = row * 5 + column + 5;
+        occ_addr = row * 4 + (column - 1) + 4;
     end
 endfunction
 
@@ -62,7 +62,7 @@ function logic [32:0] c_arr_addr(
     input logic [32:0] idx
 );
     begin
-        c_arr_addr = idx;
+        c_arr_addr = idx - 1;
     end
 endfunction
 
@@ -114,7 +114,13 @@ always_ff @(posedge clk) begin
             READ_CHAR: begin
                 c <= pattern[pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
                 loop_count <= loop_count - 1;
-                state <= RANK_L_S;
+                if (c == 0)
+                    // Skip '$' chars (should be end of input)
+                    state <= CHECK;
+                else
+                    state <= RANK_L_S;
+
+                $display("read: %d", c);
                 $display("READ_CHAR\n");
             end
 
