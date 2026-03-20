@@ -17,6 +17,15 @@ fn build_index(seq: &[u8], save: &Path) {
     std::fs::write(save, bytes).unwrap();
 }
 
+fn build_sim_index(seq: &[u8], save: &Path) {
+    let suffix_array = sarray::build(seq);
+    let bwt = bwt::build(seq, &suffix_array);
+    let index = FMIndex::build(seq, bwt, suffix_array);
+
+    let mut out = std::fs::File::create(save).unwrap();
+    index.write(&mut out).unwrap();
+}
+
 fn search(index_path: &Path, query: &[u8]) {
     let start = std::time::Instant::now();
     let bytes = fs::read(index_path).unwrap();
@@ -71,6 +80,11 @@ fn main() {
                 .arg(clap::arg!(<output> "Output index file").required(true)),
         )
         .subcommand(
+            clap::Command::new("build-sim")
+                .arg(clap::arg!(<input> "Input sequence file").required(true))
+                .arg(clap::arg!(<output> "Output index file").required(true)),
+        )
+        .subcommand(
             clap::Command::new("search")
                 .arg(clap::arg!(<index> "Input index file").required(true))
                 .arg(clap::arg!(<query> "Query string").required(true)),
@@ -96,6 +110,19 @@ fn main() {
             }
 
             build_index(&seq, Path::new(output));
+        }
+        ("build-sim", matches) => {
+            let input = matches.get_one::<String>("input").unwrap();
+            let output = matches.get_one::<String>("output").unwrap();
+
+            let mut file = io::BufReader::new(File::open(input).unwrap());
+            let mut seq = Vec::new();
+            file.read_to_end(&mut seq).unwrap();
+            if !seq.ends_with(&[b'$']) {
+                seq.push(b'$');
+            }
+
+            build_sim_index(&seq, Path::new(output));
         }
         ("search", matches) => {
             let index = matches.get_one::<String>("index").unwrap();

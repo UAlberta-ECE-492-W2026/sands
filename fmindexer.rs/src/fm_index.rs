@@ -1,3 +1,5 @@
+use std::io;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -78,6 +80,20 @@ impl FMIndex {
 
     pub fn suffix_array(&self) -> &[u32] {
         &self.sarray
+    }
+
+    pub fn write(&self, out: &mut impl io::Write) -> io::Result<()> {
+        let zero: u32 = 0;
+        out.write(&zero.to_le_bytes())?;
+
+        for count in &self.counts {
+            out.write(&count.to_le_bytes())?;
+        }
+        for n in &self.occ {
+            out.write(&n.to_le_bytes())?;
+        }
+
+        Ok(())
     }
 }
 
