@@ -21,7 +21,7 @@ module top(
 );
 
 logic [32:0] addr;
-logic [32:0] data;
+logic [`IDX_WIDTH-1:0] data;
 
 FM_Index dut (
     .clk(clk),

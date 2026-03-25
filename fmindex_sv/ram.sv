@@ -2,7 +2,7 @@ module ram (
     input logic clk,
     input logic [32:0] address,
 
-    output logic [32:0] data,
+    output logic [`IDX_WIDTH-1:0] data
 );
 
 // C table
@@ -17,10 +17,13 @@ logic [`IDX_WIDTH-1:0] Occ [0:`SIGMA-2][0:`N] = {
 };
 
 always_ff @(posedge clk) begin
-    if (address <= 4)
-        data = C_arr[address];
-    else
-        data = Occ[(address - 4) % 4][(address - 4) / 4];
+    if (address < 4) begin
+        data <= C_arr[address[1:0]];
+    end else begin
+        logic [5:0] idx;
+        idx = address[5:0] - 6'd4;
+        data <= Occ[idx[1:0]][idx[5:2]];
+    end
 end
 
 endmodule
