@@ -1,6 +1,6 @@
 module ram (
     input logic clk,
-    input logic [32:0] address,
+    input logic [31:0] address,
 
     output logic [`IDX_WIDTH-1:0] data
 );

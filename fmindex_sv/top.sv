@@ -20,7 +20,7 @@ module top(
     output logic fail
 );
 
-logic [32:0] addr;
+logic [31:0] addr;
 logic [`IDX_WIDTH-1:0] data;
 
 FM_Index dut (

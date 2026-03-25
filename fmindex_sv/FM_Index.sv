@@ -13,7 +13,7 @@ module FM_Index (
     input logic [$clog2(`PAT_LEN+1)-1:0] pat_len_in,
 
     input logic [`IDX_WIDTH-1:0] ram_data,
-    output logic [32:0] ram_addr,
+    output logic [31:0] ram_addr,
 
     output logic done,
     output logic fail,
@@ -49,7 +49,7 @@ typedef struct packed {
     logic [LOOP_COUNT_W-1:0] loop_count;
 } search_t;
 
-function automatic logic [32:0] occ_addr(
+function automatic logic [31:0] occ_addr(
     input logic [`CHAR_WIDTH-1:0] char,
     input logic [`IDX_WIDTH-1:0] row
 );
@@ -61,7 +61,7 @@ function automatic logic [32:0] occ_addr(
     end
 endfunction
 
-function automatic logic [32:0] c_arr_addr(
+function automatic logic [31:0] c_arr_addr(
     input logic [`CHAR_WIDTH-1:0] char
 );
     begin
