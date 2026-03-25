@@ -11,7 +11,7 @@ module top(
     input logic start,
 
     input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
-    input int pat_len_in,
+    input logic [$clog2(`PAT_LEN+1)-1:0] pat_len_in,
 
     output logic [`IDX_WIDTH-1:0] l_out,
     output logic [`IDX_WIDTH-1:0] r_out,

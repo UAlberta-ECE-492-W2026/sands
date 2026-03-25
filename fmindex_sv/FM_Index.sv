@@ -10,7 +10,7 @@ module FM_Index (
     input logic start,
 
     input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
-    input int pat_len_in,
+    input logic [$clog2(`PAT_LEN+1)-1:0] pat_len_in,
 
     input logic [`IDX_WIDTH-1:0] ram_data,
     output logic [32:0] ram_addr,
@@ -21,6 +21,9 @@ module FM_Index (
     output logic [`IDX_WIDTH-1:0] l_out,
     output logic [`IDX_WIDTH-1:0] r_out
 );
+
+localparam int PAT_IDX_W = $clog2(`PAT_LEN);
+localparam int LOOP_COUNT_W = $clog2(`PAT_LEN + 1);
 
 typedef enum logic [3:0] {
     IDLE,
@@ -37,29 +40,39 @@ typedef enum logic [3:0] {
     FAIL_S
 } state_t;
 
+typedef struct packed {
+    logic [`IDX_WIDTH-1:0] l;
+    logic [`IDX_WIDTH-1:0] r;
+    logic [`IDX_WIDTH-1:0] rank_l;
+    logic [`IDX_WIDTH-1:0] rank_r;
+    logic [PAT_IDX_W-1:0] pat_idx;
+    logic [LOOP_COUNT_W-1:0] loop_count;
+} search_t;
+
 function automatic logic [32:0] occ_addr(
-    input logic [`CHAR_WIDTH-1:0] column,
+    input logic [`CHAR_WIDTH-1:0] char,
     input logic [`IDX_WIDTH-1:0] row
 );
     begin
+        // Read from occ array in RAM (NOTE: char is 1-based index, row and RAM is 0-based)
+        // &Occ[c][r] = OCC_OFFSET + ROW_WIDTH * row + (char - 1)
+        //            = 4          + 4         * row + (char - 1)
         occ_addr = row * 4 + ({29'd0, column} - 33'd1) + 33'd4;
     end
 endfunction
 
 function automatic logic [32:0] c_arr_addr(
-    input logic [`CHAR_WIDTH-1:0] idx
+    input logic [`CHAR_WIDTH-1:0] char
 );
     begin
-        c_arr_addr = {30'd0, idx} - 33'd1;
+        // Read from count array in RAM (char is 1-based index, RAM is 0-based)
+        // &Count[char] = char - 1
+        c_arr_addr = {30'd0, char} - 33'd1;
     end
 endfunction
 
-state_t state;
-state_t next_state;
-always_ff @(posedge clk) begin
-    if (reset) state <= IDLE;
-    else state <= next_state;
-end
+state_t state, next_state;
+search_t cur, nxt;
 
 // Logging
 `ifdef VERILATOR
@@ -81,8 +94,13 @@ always_ff @(negedge clk) begin
 end
 `endif
 
-logic [`CHAR_WIDTH-1:0] c;
-assign c = pattern[pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
+always_ff @(posedge clk) begin
+    if (reset) state <= IDLE;
+    else state <= next_state;
+end
+
+logic [`CHAR_WIDTH-1:0] char;
+assign char = pattern[cur.pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
 
 // Next state
 always_comb begin
@@ -97,7 +115,7 @@ always_comb begin
     INIT: next_state = READ_CHAR;
 
     READ_CHAR: begin
-        if (c == 0)
+        if (char == 0)
             // Skip '$' chars (should be end of input)
             next_state = CHECK;
         else
@@ -112,9 +130,9 @@ always_comb begin
     UPDATE_LOAD: next_state = CHECK;
 
     CHECK: begin
-        if (l >= r) begin
+        if (cur.l >= cur.r) begin
             next_state = FAIL_S;
-        end else if (loop_count == 0) begin
+        end else if (cur.loop_count == 0) begin
             next_state = DONE_S;
         end else begin
             next_state = READ_CHAR;
@@ -129,81 +147,58 @@ always_comb begin
 end
 
 // Outputs
-assign l_out = l;
-assign r_out = r;
+assign l_out = cur.l;
+assign r_out = cur.r;
 assign done = state == DONE_S;
 assign fail = state == FAIL_S;
 always_comb begin
     case (state)
-    RANK_L_S: ram_addr = occ_addr(c, l);
-    RANK_R_S: ram_addr = occ_addr(c, r);
-    UPDATE: ram_addr = c_arr_addr(c);
+    RANK_L_S: ram_addr = occ_addr(char, cur.l);
+    RANK_R_S: ram_addr = occ_addr(char, cur.r);
+    UPDATE: ram_addr = c_arr_addr(char);
     default: ram_addr = 0;
     endcase
 end
 
-// Register Updates
-logic [`IDX_WIDTH-1:0] l, next_l;
-logic [`IDX_WIDTH-1:0] r, next_r;
-logic [`IDX_WIDTH-1:0] rank_l, next_rank_l;
-logic [`IDX_WIDTH-1:0] rank_r, next_rank_r;
-int pat_idx, next_pat_idx;
-int loop_count, next_loop_count;
-
 always_ff @(posedge clk) begin
     if (reset) begin
-        l <= 0;
-        r <= 0;
-        rank_l <= 0;
-        rank_r <= 0;
-        pat_idx <= 0;
-        loop_count <= 0;
+        cur <= '0;
     end else begin
-        l <= next_l;
-        r <= next_r;
-        rank_l <= next_rank_l;
-        rank_r <= next_rank_r;
-        pat_idx <= next_pat_idx;
-        loop_count <= next_loop_count;
+        cur <= nxt;
     end
 end
 
 always_comb begin
-    next_l = l;
-    next_r = r;
-    next_rank_l = rank_l;
-    next_rank_r = rank_r;
-    next_pat_idx = pat_idx;
-    next_loop_count = loop_count;
+    nxt = cur;
 
     case (state)
     INIT: begin
-        next_l = `IDX_WIDTH'd0;
-        next_r = `IDX_WIDTH'd`N;
-        next_loop_count = pat_len_in;
-        next_pat_idx = `PAT_LEN - 1;
+        nxt.l = `IDX_WIDTH'd0;
+        nxt.r = `IDX_WIDTH'd`N;
+        nxt.loop_count = pat_len_in;
+        nxt.pat_idx = PAT_IDX_W'(`PAT_LEN - 1);
     end
 
     READ_CHAR: begin
-        next_loop_count = loop_count - 1;
+        nxt.loop_count = cur.loop_count - 1'b1;
     end
 
     RANK_L_S_LOAD: begin
-        next_rank_l = ram_data; // Occ[c][l];
+        nxt.rank_l = ram_data; // Occ[char][l];
     end
 
     RANK_R_S_LOAD: begin
-        next_rank_r = ram_data; // Occ[c][r];
+        nxt.rank_r = ram_data; // Occ[char][r];
     end
 
     UPDATE_LOAD: begin
-        next_l = ram_data + rank_l; // C_arr[c] + rank_l;
-        next_r = ram_data + rank_r; // C_arr[c] + rank_r;
+        nxt.l = ram_data + cur.rank_l; // C_arr[char] + rank_l;
+        nxt.r = ram_data + cur.rank_r; // C_arr[char] + rank_r;
     end
 
     CHECK: begin
-        if (!(l >= r) && !(loop_count == 0)) begin
-            next_pat_idx = pat_idx - 1;
+        if (!(cur.l >= cur.r) && !(cur.loop_count == 0)) begin
+            nxt.pat_idx = cur.pat_idx - 1'b1;
         end
     end
 
