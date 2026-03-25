@@ -12,14 +12,13 @@ module top(
 
     input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
     input int pat_len_in,
-    input logic we
+
+    output logic [`IDX_WIDTH-1:0] l_out,
+    output logic [`IDX_WIDTH-1:0] r_out,
+
+    output logic done,
+    output logic fail
 );
-
-logic done;
-logic fail;
-
-logic [`IDX_WIDTH-1:0] l_out;
-logic [`IDX_WIDTH-1:0] r_out;
 
 logic [32:0] addr;
 logic [32:0] data;
@@ -30,7 +29,6 @@ FM_Index dut (
     .start(start),
     .pattern(pattern),
     .pat_len_in(pat_len_in),
-    .we(we),
     .ram_addr(addr),
     .ram_data(data),
     .done(done),

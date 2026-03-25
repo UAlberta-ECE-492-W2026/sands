@@ -74,13 +74,10 @@ int main(int argc, char **argv) {
         // STEP 4.2: if data sent from pipe, add data to memory and start algorithm
         if (r == sizeof(cmd)) {
             printf("Received: pattern=%d length=%d\n", cmd.pattern, cmd.pat_len);
-            top->we = 1;
             top->pattern = cmd.pattern;
             top->pat_len_in = cmd.pat_len;
             top->start = 1;
             top->reset = 0;
-        } else {
-            top->we = 0;
         }
 
         // STEP 4.3: simulate rising edge of clock
@@ -93,6 +90,12 @@ int main(int argc, char **argv) {
         //tfp->dump(main_time);
 
         top->start = 0;
+
+        if (top->done) {
+            printf("DONE: l=%d, r=%d\n", top->l_out, top->r_out);
+        } else if (top->fail) {
+            printf("FAIL\n");
+        }
 
         main_time++;
 
