@@ -14,30 +14,46 @@ program appends a trailing `$` before building the index.
 
 ## File layout
 
-The output file is a plain sequence of little-endian `u32` values with no
-header, footer, or length prefix.
+The output file is a sequence of little-endian `u32` values with a 3-word
+header followed by the FM-index tables.
 
 The layout is:
 
-1. `counts[0]`
-2. `counts[1]`
-3. `counts[2]`
-4. ...
-5. `counts[counts.len() - 1]`
-6. `occ[0]`
-7. `occ[1]`
-8. `occ[2]`
-9. ...
-10. `occ[occ.len() - 1]`
+1. `magic`
+2. `sequence_length`
+3. `alphabet_length`
+4. `counts[0]`
+5. `counts[1]`
+6. `counts[2]`
+7. ...
+8. `counts[counts.len() - 1]`
+9. `occ[0]`
+10. `occ[1]`
+11. `occ[2]`
+12. ...
+13. `occ[occ.len() - 1]`
 
 So the file is:
 
 ```text
-counts serialized as u32 little-endian
-then occ serialized as u32 little-endian
+[magic][sequence_length][alphabet_length][counts...][occ...]
 ```
 
 ## Field meaning
+
+### `magic`
+
+`magic` identifies the simulator format and is always `0x31444946`, which is
+the ASCII string `FID1` in little-endian form.
+
+### `sequence_length`
+
+`sequence_length` is the FM-index text length, including the trailing `$`.
+
+### `alphabet_length`
+
+`alphabet_length` is the number of symbols in the sorted alphabet, excluding
+`$`.
 
 ### `counts`
 
@@ -68,6 +84,9 @@ occ.len() == k * (n + 1)
 
 The first `k` entries are all zero. After that, each block of `k` entries
 contains the cumulative counts after consuming one more character of the BWT.
+
+The simulator uses `alphabet_length` to compute the row width and
+`sequence_length` to determine the maximum prefix length.
 
 Indexing is:
 

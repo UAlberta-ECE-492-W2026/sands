@@ -1,8 +1,8 @@
 `define CHAR_WIDTH 3
 `define PAT_LEN 8 
-`define IDX_WIDTH 4
+`define IDX_WIDTH 32
 `define SIGMA 5
-`define N 8
+`define N 15
 
 module top(
     input logic clk,

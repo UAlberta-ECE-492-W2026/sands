@@ -1,8 +1,9 @@
 `define CHAR_WIDTH 3
 `define PAT_LEN 8 
-`define IDX_WIDTH 4
-`define SIGMA 5
-`define N 8
+`define IDX_WIDTH 32
+`define HEADER_WORDS 3
+
+localparam logic [31:0] INDEX_MAGIC = 32'h3144_4946; // "FID1" in little-endian bytes
 
 module FM_Index (
     input logic clk,
@@ -28,6 +29,9 @@ localparam int LOOP_COUNT_W = $clog2(`PAT_LEN + 1);
 typedef enum logic [3:0] {
     IDLE,
     INIT,
+    INIT_LOAD_MAGIC,
+    INIT_LOAD_LEN,
+    INIT_LOAD_ALPHA,
     READ_CHAR,
     RANK_L_S,
     RANK_L_S_LOAD,
@@ -41,6 +45,9 @@ typedef enum logic [3:0] {
 } state_t;
 
 typedef struct packed {
+    logic [31:0] magic;
+    logic [31:0] seq_len;
+    logic [31:0] sigma_m1;
     logic [`IDX_WIDTH-1:0] l;
     logic [`IDX_WIDTH-1:0] r;
     logic [`IDX_WIDTH-1:0] rank_l;
@@ -51,13 +58,14 @@ typedef struct packed {
 
 function automatic logic [31:0] occ_addr(
     input logic [`CHAR_WIDTH-1:0] char,
-    input logic [`IDX_WIDTH-1:0] row
+    input logic [31:0] row,
+    input logic [31:0] sigma_m1
 );
     begin
         // Read from occ array in RAM (NOTE: char is 1-based index, row and RAM is 0-based)
-        // &Occ[c][r] = OCC_OFFSET + ROW_WIDTH * row + (char - 1)
-        //            = 4          + 4         * row + (char - 1)
-        occ_addr = row * 4 + ({29'd0, column} - 33'd1) + 33'd4;
+        // File layout:
+        //   header[0..2], counts[0..sigma_m1-1], occ[row * sigma_m1 + col]
+        occ_addr = `HEADER_WORDS + sigma_m1 + (row * sigma_m1) + ({29'd0, char} - 32'd1);
     end
 endfunction
 
@@ -66,8 +74,8 @@ function automatic logic [31:0] c_arr_addr(
 );
     begin
         // Read from count array in RAM (char is 1-based index, RAM is 0-based)
-        // &Count[char] = char - 1
-        c_arr_addr = {30'd0, char} - 33'd1;
+        // header[0..2] are reserved, counts start immediately after the header
+        c_arr_addr = `HEADER_WORDS + ({29'd0, char} - 32'd1);
     end
 endfunction
 
@@ -79,7 +87,10 @@ search_t cur, nxt;
 always_ff @(negedge clk) begin
     case (state)
     INIT: $display("INIT");
-    READ_CHAR: $display("READ_CHAR c=%d", c);
+    INIT_LOAD_MAGIC: $display("INIT_LOAD_MAGIC");
+    INIT_LOAD_LEN: $display("INIT_LOAD_LEN");
+    INIT_LOAD_ALPHA: $display("INIT_LOAD_ALPHA");
+    READ_CHAR: $display("READ_CHAR c=%d", char);
     RANK_L_S: $display("RANK_L_S");
     RANK_L_S_LOAD: $display("RANK_L_S_LOAD");
     RANK_R_S: $display("RANK_R_S");
@@ -112,7 +123,18 @@ always_comb begin
             next_state = IDLE;
     end
 
-    INIT: next_state = READ_CHAR;
+    INIT: next_state = INIT_LOAD_MAGIC;
+
+    INIT_LOAD_MAGIC: begin
+        if (ram_data != INDEX_MAGIC)
+            next_state = FAIL_S;
+        else
+            next_state = INIT_LOAD_LEN;
+    end
+
+    INIT_LOAD_LEN: next_state = INIT_LOAD_ALPHA;
+
+    INIT_LOAD_ALPHA: next_state = READ_CHAR;
 
     READ_CHAR: begin
         if (char == 0)
@@ -153,8 +175,12 @@ assign done = state == DONE_S;
 assign fail = state == FAIL_S;
 always_comb begin
     case (state)
-    RANK_L_S: ram_addr = occ_addr(char, cur.l);
-    RANK_R_S: ram_addr = occ_addr(char, cur.r);
+    INIT: ram_addr = 32'd0;
+    INIT_LOAD_MAGIC: ram_addr = 32'd1;
+    INIT_LOAD_LEN: ram_addr = 32'd2;
+    INIT_LOAD_ALPHA: ram_addr = 32'd0;
+    RANK_L_S: ram_addr = occ_addr(char, cur.l, cur.sigma_m1);
+    RANK_R_S: ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
     UPDATE: ram_addr = c_arr_addr(char);
     default: ram_addr = 0;
     endcase
@@ -173,8 +199,24 @@ always_comb begin
 
     case (state)
     INIT: begin
+        nxt = cur;
+    end
+
+    INIT_LOAD_MAGIC: begin
+        nxt = cur;
+        nxt.magic = ram_data;
+    end
+
+    INIT_LOAD_LEN: begin
+        nxt = cur;
+        nxt.seq_len = ram_data;
+    end
+
+    INIT_LOAD_ALPHA: begin
+        nxt = cur;
+        nxt.sigma_m1 = ram_data;
         nxt.l = `IDX_WIDTH'd0;
-        nxt.r = `IDX_WIDTH'd`N;
+        nxt.r = cur.seq_len;
         nxt.loop_count = pat_len_in;
         nxt.pat_idx = PAT_IDX_W'(`PAT_LEN - 1);
     end

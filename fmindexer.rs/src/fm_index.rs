@@ -83,6 +83,10 @@ impl FMIndex {
     }
 
     pub fn write(&self, out: &mut impl io::Write) -> io::Result<()> {
+        out.write_all(&0x3144_4946u32.to_le_bytes())?;
+        out.write_all(&(self.bwt.len() as u32).to_le_bytes())?;
+        out.write_all(&(self.alphabet.len() as u32).to_le_bytes())?;
+
         for count in &self.counts {
             out.write(&count.to_le_bytes())?;
         }
@@ -97,6 +101,7 @@ impl FMIndex {
 #[cfg(test)]
 mod tests {
     use super::FMIndex;
+    use std::io::Cursor;
 
     fn banana_sequence() -> Vec<u8> {
         let mut seq = b"BANANA".to_vec();
@@ -131,5 +136,22 @@ mod tests {
         let index = build_banana_index();
         assert_eq!(index.search(b"ANA"), Some((2, 4)));
         assert!(index.search(b"ABB").is_none());
+    }
+
+    #[test]
+    fn writes_headered_sim_format() {
+        let index = build_banana_index();
+        let mut out = Cursor::new(Vec::new());
+
+        index.write(&mut out).unwrap();
+        let bytes = out.into_inner();
+
+        assert_eq!(bytes.len(), 12 + 4 * (index.counts.len() + index.occ.len()));
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 0x3144_4946);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 5);
     }
 }
