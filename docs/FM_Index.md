@@ -10,63 +10,74 @@ The design is split into three parts:
 
 ## States Overview
 
-- `IDLE` waits for a `query_valid` pulse once bootstrap has finished.
-- `INIT` performs the one-time bootstrap after reset, loading the header words from addresses `0`, `1`, and `2`.
-- `READ_CHAR` consumes one pattern character and starts the next request burst for that slot.
-- `WAIT_OCC_L`, `WAIT_OCC_R`, and `WAIT_C_BASE` wait for the delayed RAM response that belongs to the current burst.
-- `DONE_S` and `FAIL_S` are terminal states for a completed slot.
+- `BOOT_MAGIC_REQ`, `BOOT_LEN_REQ`, and `BOOT_ALPHA_REQ` issue the three bootstrap reads at addresses `0`, `1`, and `2`.
+- `BOOT_MAGIC_WAIT`, `BOOT_LEN_WAIT`, and `BOOT_ALPHA_WAIT` are the corresponding bootstrap wait states.
+- `BOOT_DONE` means bootstrap has completed and queries may be accepted.
+- `SLOT_FREE` is an unused slot.
+- `SLOT_READ_CHAR` consumes one pattern character and starts the next request burst for that slot.
+- `SLOT_WAIT_OCC_L`, `SLOT_READY_OCC_R`, `SLOT_WAIT_OCC_R`, `SLOT_READY_C_BASE`, and `SLOT_WAIT_C_BASE` cover the three-read burst for one search step.
+- `SLOT_DONE` and `SLOT_FAIL` are terminal states for a completed slot.
 
 ## Per-Slot Burst
 
 The repeating search loop is:
 
-1. `READ_CHAR` fetches the current pattern character from `pattern[pat_idx]`.
+1. `SLOT_READ_CHAR` fetches the current pattern character from `pattern[pat_idx]`.
 2. The character is latched into `cur_char` for the whole three-read burst.
 3. If the character is zero, the slot either finishes when the pattern is fully consumed or fails immediately if zero appears early.
-4. Otherwise it requests `Occ(cur_char, l)` and enters `WAIT_OCC_L`.
+4. Otherwise it requests `Occ(cur_char, l)` and enters `SLOT_WAIT_OCC_L`.
 5. After the `Occ(cur_char, l)` response, the slot requests `Occ(cur_char, r)`.
 6. After the `Occ(cur_char, r)` response, the slot requests `C(cur_char)`.
 7. After the `C(cur_char)` response, the slot updates the search interval and either loops, finishes, or fails.
 
 ## Output Behavior
 
-- `done` is asserted when the machine is in `DONE_S`.
-- `fail` is asserted when the machine is in `FAIL_S`.
-- `result_valid` pulses when a slot reaches `DONE_S` or `FAIL_S`.
+- `done` is asserted when `result_valid` and `result_done` are both high.
+- `fail` is asserted when `result_valid` and `result_fail` are both high.
+- `result_valid` pulses when a slot reaches `SLOT_DONE` or `SLOT_FAIL`.
 - `result_done` and `result_fail` identify the result type.
 - `result_query_id` tags that result so the simulator can print results back in submission order.
 - `l_out` and `r_out` carry the completed interval for the emitted result.
 
-## Control State Diagram
+## Bootstrap And Slot Flow
 
-At a high-level, the per-slot FSM state diagram is given below. `WAIT_OCC_L`, `WAIT_OCC_R`, and `WAIT_C_BASE` are the burst-wait states, and the sequence diagram below shows how the RAM transactions line up with those state transitions.
+At a high level, the bootstrap state machine handles the three header reads
+once after reset. After `BOOT_DONE`, the controller accepts search queries and
+the slot states below handle the recurring `Occ` and `C` lookups during
+backward search.
 
 ```mermaid
 stateDiagram-v2
     direction LR
 
-    [*] --> IDLE
+    [*] --> BOOT_MAGIC_REQ
 
-    IDLE --> INIT: first query after reset
-    IDLE --> READ_CHAR: later queries after bootstrap
-    INIT --> READ_CHAR: bootstrap complete
-    READ_CHAR --> FAIL_S: char == 0 and loop_count > 0
-    READ_CHAR --> WAIT_OCC_L: char != 0 / issue Occ(cur_char, l)
+    BOOT_MAGIC_REQ --> BOOT_MAGIC_WAIT
+    BOOT_MAGIC_WAIT --> BOOT_LEN_REQ: magic ok
+    BOOT_MAGIC_WAIT --> [*]: bad magic
+    BOOT_LEN_REQ --> BOOT_LEN_WAIT
+    BOOT_LEN_WAIT --> BOOT_ALPHA_REQ
+    BOOT_ALPHA_REQ --> BOOT_ALPHA_WAIT
+    BOOT_ALPHA_WAIT --> BOOT_DONE
 
-    WAIT_OCC_L --> WAIT_OCC_R
-    WAIT_OCC_R --> WAIT_C_BASE
-    WAIT_C_BASE --> READ_CHAR: continue
-    WAIT_C_BASE --> DONE_S: finished
-    WAIT_C_BASE --> FAIL_S: empty interval
-    READ_CHAR --> DONE_S: char == 0 and loop_count == 0
+    SLOT_READ_CHAR --> SLOT_FAIL: char == 0 and loop_count > 0
+    SLOT_READ_CHAR --> SLOT_WAIT_OCC_L: char != 0 / issue Occ(cur_char, l)
+    SLOT_WAIT_OCC_L --> SLOT_READY_OCC_R
+    SLOT_READY_OCC_R --> SLOT_WAIT_OCC_R
+    SLOT_WAIT_OCC_R --> SLOT_READY_C_BASE
+    SLOT_READY_C_BASE --> SLOT_WAIT_C_BASE
+    SLOT_WAIT_C_BASE --> SLOT_READ_CHAR: continue
+    SLOT_WAIT_C_BASE --> SLOT_DONE: finished
+    SLOT_WAIT_C_BASE --> SLOT_FAIL: empty interval
+    SLOT_READ_CHAR --> SLOT_DONE: char == 0 and loop_count == 0
 
-    DONE_S --> IDLE
-    FAIL_S --> IDLE
+    SLOT_DONE --> SLOT_FREE
+    SLOT_FAIL --> SLOT_FREE
 ```
 
 ## Memory Operation Flow
 
-`WAIT_OCC_L`, `WAIT_OCC_R`, and `WAIT_C_BASE` serve two jobs:
+`SLOT_WAIT_OCC_L`, `SLOT_WAIT_OCC_R`, and `SLOT_WAIT_C_BASE` serve two jobs:
 
 1. Wait for the RAM delay to expire.
 2. Perform the action associated with the completed memory request.
@@ -82,15 +93,12 @@ The request kind tells the slot state machine what to do when the response becom
 | `REQ_OCC_R` | Read `Occ(cur_char, r)` | Save `rank_r`, then request `C(cur_char)`. |
 | `REQ_C_BASE` | Read `C(cur_char)` | Update `l` and `r`, then either loop, finish, or fail. |
 
-## State and Sequence Diagram
+## State And Sequence Diagram
 
 The sequence diagram shows the request order and the state transitions into and
-out of the burst-wait states. The bootstrap phase uses the first three header
-words once after reset, then later pattern slots jump directly into
-`READ_CHAR` and reuse the burst states for the recurring `Occ` and `C` lookups
-during backward search.
+out of the bootstrap and burst-wait states.
 
-Note the bootstrap addresses (header fields) which are read before alignment:
+The bootstrap reads these header fields:
 - `addr 0`: `INDEX_MAGIC`
 - `addr 1`: `seq_len`
 - `addr 2`: `sigma_m1`
@@ -101,54 +109,53 @@ sequenceDiagram
     participant RAM as RAM
 
     Note over FSM,RAM: Bootstrap reads
-    FSM->>FSM: IDLE -> INIT
     FSM->>RAM: request addr 0 (INDEX_MAGIC)
-    FSM->>FSM: INIT -> WAIT_BOOT_MAGIC
+    FSM->>FSM: BOOT_MAGIC_REQ -> BOOT_MAGIC_WAIT
     RAM-->>FSM: magic
     alt magic mismatch
-        FSM->>FSM: WAIT_BOOT_MAGIC -> FAIL_S
+        FSM->>FSM: $fatal("FM_Index: bad magic word")
     else magic ok
         FSM->>RAM: request addr 1 (seq_len)
-        FSM->>FSM: WAIT_BOOT_MAGIC -> WAIT_BOOT_LEN
+        FSM->>FSM: BOOT_LEN_REQ -> BOOT_LEN_WAIT
         RAM-->>FSM: seq_len
         FSM->>RAM: request addr 2 (sigma_m1)
-        FSM->>FSM: WAIT_BOOT_LEN -> WAIT_BOOT_ALPHA
+        FSM->>FSM: BOOT_ALPHA_REQ -> BOOT_ALPHA_WAIT
         RAM-->>FSM: sigma_m1
-        FSM->>FSM: WAIT_BOOT_ALPHA -> READ_CHAR
+        FSM->>FSM: BOOT_ALPHA_WAIT -> BOOT_DONE
     end
 
-    Note over FSM,RAM: Operational reads
+    Note over FSM,RAM: Slot reads
     loop per pattern character
         alt char == 0
             alt loop_count == 0
-                FSM->>FSM: READ_CHAR -> DONE_S
+                FSM->>FSM: SLOT_READ_CHAR -> SLOT_DONE
             else early zero
-                FSM->>FSM: READ_CHAR -> FAIL_S
+                FSM->>FSM: SLOT_READ_CHAR -> SLOT_FAIL
             end
         else continue
             FSM->>RAM: request Occ(cur_char, l)
-            FSM->>FSM: READ_CHAR -> WAIT_OCC_L
+            FSM->>FSM: SLOT_READ_CHAR -> SLOT_WAIT_OCC_L
             RAM-->>FSM: rank_l
             FSM->>RAM: request Occ(cur_char, r)
-            FSM->>FSM: WAIT_OCC_L -> WAIT_OCC_R
+            FSM->>FSM: SLOT_WAIT_OCC_L -> SLOT_READY_OCC_R -> SLOT_WAIT_OCC_R
             RAM-->>FSM: rank_r
             FSM->>RAM: request C(cur_char)
-            FSM->>FSM: WAIT_OCC_R -> WAIT_C_BASE
+            FSM->>FSM: SLOT_WAIT_OCC_R -> SLOT_READY_C_BASE -> SLOT_WAIT_C_BASE
             RAM-->>FSM: c_base
             alt l >= r
-                FSM->>FSM: WAIT_C_BASE -> FAIL_S
+                FSM->>FSM: SLOT_WAIT_C_BASE -> SLOT_FAIL
             else loop_count == 0
-                FSM->>FSM: WAIT_C_BASE -> DONE_S
+                FSM->>FSM: SLOT_WAIT_C_BASE -> SLOT_DONE
             else continue
-                FSM->>FSM: WAIT_C_BASE -> READ_CHAR
+                FSM->>FSM: SLOT_WAIT_C_BASE -> SLOT_READ_CHAR
             end
         end
     end
 ```
 
 In the operational loop, a zero pattern symbol is only legal once the pattern
-has been fully consumed. If `READ_CHAR` sees `char == 0` before `loop_count`
-reaches zero, that slot now takes the `FAIL_S` branch immediately.
+has been fully consumed. If `SLOT_READ_CHAR` sees `char == 0` before
+`loop_count` reaches zero, that slot takes the `SLOT_FAIL` branch immediately.
 
 ## RAM is Async
 
