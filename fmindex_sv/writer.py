@@ -38,7 +38,7 @@ if pat_len > PAT_MAX_LEN:
     raise ValueError("pattern is longer than PAT_MAX_LEN")
 
 pattern_bits = 0
-for idx, code in enumerate(pat_codes):
+for idx, code in enumerate(reversed(pat_codes)):
     bit_pos = (PAT_MAX_LEN - 1 - idx) * CHAR_WIDTH
     pattern_bits |= code << bit_pos
 
