@@ -12,6 +12,7 @@ The design is split into three parts:
 
 - `BOOT_MAGIC_REQ`, `BOOT_LEN_REQ`, and `BOOT_ALPHA_REQ` issue the three bootstrap reads at addresses `0`, `1`, and `2`.
 - `BOOT_MAGIC_WAIT`, `BOOT_LEN_WAIT`, and `BOOT_ALPHA_WAIT` are the corresponding bootstrap wait states.
+- `BOOT_FAIL` is a terminal state if the header magic word is invalid.
 - `BOOT_DONE` means bootstrap has completed and queries may be accepted.
 - `SLOT_FREE` is an unused slot.
 - `SLOT_READ_CHAR` consumes one pattern character and starts the next request burst for that slot.
@@ -54,11 +55,12 @@ stateDiagram-v2
 
     BOOT_MAGIC_REQ --> BOOT_MAGIC_WAIT
     BOOT_MAGIC_WAIT --> BOOT_LEN_REQ: magic ok
-    BOOT_MAGIC_WAIT --> [*]: bad magic
+    BOOT_MAGIC_WAIT --> BOOT_FAIL: bad magic
     BOOT_LEN_REQ --> BOOT_LEN_WAIT
     BOOT_LEN_WAIT --> BOOT_ALPHA_REQ
     BOOT_ALPHA_REQ --> BOOT_ALPHA_WAIT
     BOOT_ALPHA_WAIT --> BOOT_DONE
+    BOOT_FAIL --> [*]
 
     SLOT_READ_CHAR --> SLOT_FAIL: char == 0 and loop_count > 0
     SLOT_READ_CHAR --> SLOT_WAIT_OCC_L: char != 0 / issue Occ(cur_char, l)
@@ -113,7 +115,7 @@ sequenceDiagram
     FSM->>FSM: BOOT_MAGIC_REQ -> BOOT_MAGIC_WAIT
     RAM-->>FSM: magic
     alt magic mismatch
-        FSM->>FSM: $fatal("FM_Index: bad magic word")
+        FSM->>FSM: BOOT_MAGIC_WAIT -> BOOT_FAIL
     else magic ok
         FSM->>RAM: request addr 1 (seq_len)
         FSM->>FSM: BOOT_LEN_REQ -> BOOT_LEN_WAIT

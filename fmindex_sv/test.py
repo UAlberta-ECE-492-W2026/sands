@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import struct
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -126,15 +127,25 @@ def build_index(bin_path: Path, seq_path: Path, out_path: Path, subcommand: str)
     )
 
 
+def corrupt_magic(index_path: Path, magic: int) -> None:
+    data = bytearray(index_path.read_bytes())
+    if len(data) < 4:
+        raise ValueError(f"index file too short to patch magic: {index_path}")
+    data[:4] = struct.pack("<I", magic)
+    index_path.write_bytes(data)
+
+
 def run_sv(
     repo_root: Path,
     index_path: Path,
     patterns: tuple[str, ...],
     rebuild: bool,
+    *,
+    repeat: int = 1,
 ) -> list[tuple[int, int] | None]:
     env = {
         "INDEX_BIN": str(index_path),
-        "FMINDEX_REPEAT": "1",
+        "FMINDEX_REPEAT": str(repeat),
         "FMINDEX_SLEEP_SECS": "0",
         "PAT_MAX_LEN": str(PAT_MAX_LEN),
     }
@@ -157,6 +168,41 @@ def run_sv(
             f"fmindex_sv/run.sh failed\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
     return parse_sv_searches(proc.stdout)
+
+
+def run_sv_raw(
+    repo_root: Path,
+    index_path: Path,
+    patterns: tuple[str, ...],
+    rebuild: bool,
+    *,
+    repeat: int = 1,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        "INDEX_BIN": str(index_path),
+        "FMINDEX_REPEAT": str(repeat),
+        "FMINDEX_SLEEP_SECS": "0",
+        "PAT_MAX_LEN": str(PAT_MAX_LEN),
+    }
+    if rebuild:
+        env["SV_REBUILD"] = "1"
+
+    args = ["./run.sh"]
+    for pattern in patterns:
+        args.extend(["--pattern", pattern])
+
+    proc = subprocess.run(
+        args,
+        cwd=repo_root / "fmindex_sv",
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"fmindex_sv/run.sh failed\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    return proc
 
 
 def run_case(
@@ -271,6 +317,41 @@ def run_suite(
     print()
 
 
+def run_bad_magic_case(
+    repo_root: Path,
+    fmindexer_bin: Path,
+    tmpdir: Path,
+) -> None:
+    case_dir = tmpdir / "bad-magic"
+    case_dir.mkdir()
+    seq_path = case_dir / "seq.txt"
+    sv_index_path = case_dir / "sv.fmi"
+    seq_path.write_text("ACGTACGT")
+
+    build_index(fmindexer_bin, seq_path, sv_index_path, "build-sim")
+    corrupt_magic(sv_index_path, 0)
+
+    proc = run_sv_raw(
+        repo_root,
+        sv_index_path,
+        (),
+        rebuild=False,
+        repeat=0,
+    )
+
+    if "Timeout" in proc.stdout or "Timeout" in proc.stderr:
+        raise AssertionError(
+            "bad-magic case timed out instead of terminating cleanly\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}\n"
+        )
+    if "DONE:" in proc.stdout or "FAIL" in proc.stdout:
+        raise AssertionError(
+            "bad-magic case unexpectedly emitted a search result\n"
+            f"stdout:\n{proc.stdout}\n"
+        )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test.py <repo-root>")
@@ -313,8 +394,12 @@ def main() -> int:
             tmpdir,
             rebuild_first_case=False,
         )
+        run_bad_magic_case(repo_root, fmindexer_bin, tmpdir)
 
-    print(f"PASS: compatibility={CASES}, empty-sequence=2, empty-pattern=2, multi-pattern=2")
+    print(
+        f"PASS: compatibility={CASES}, empty-sequence=2, empty-pattern=2, "
+        f"multi-pattern=2, bad-magic=1"
+    )
     return 0
 
 

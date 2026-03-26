@@ -48,6 +48,7 @@ typedef enum logic [2:0] {
     BOOT_LEN_WAIT,
     BOOT_ALPHA_REQ,
     BOOT_ALPHA_WAIT,
+    BOOT_FAIL,
     BOOT_DONE
 } boot_state_t;
 
@@ -235,9 +236,10 @@ always_comb begin
         case (resp_kind)
         REQ_BOOT_MAGIC: begin
             if (ram_data != INDEX_MAGIC) begin
-                $fatal(1, "FM_Index: bad magic word");
+                boot_state_n = BOOT_FAIL;
+            end else begin
+                boot_state_n = BOOT_LEN_REQ;
             end
-            boot_state_n = BOOT_LEN_REQ;
         end
 
         REQ_BOOT_LEN: begin
@@ -321,6 +323,10 @@ always_comb begin
             issue_kind = REQ_BOOT_ALPHA;
             issue_addr = 32'd2;
             boot_state_n = BOOT_ALPHA_WAIT;
+        end
+
+        BOOT_FAIL: begin
+            // Bad magic: stop issuing requests and leave the controller parked.
         end
 
         default: begin
