@@ -26,7 +26,7 @@ fn build_sim_index(seq: &[u8], save: &Path) {
     index.write(&mut out).unwrap();
 }
 
-fn search(index_path: &Path, query: &[u8]) {
+fn search(index_path: &Path, query: &[u8], list_all_outputs: bool) {
     let start = std::time::Instant::now();
     let bytes = fs::read(index_path).unwrap();
     let index: FMIndex = postcard::from_bytes(&bytes).unwrap();
@@ -34,8 +34,12 @@ fn search(index_path: &Path, query: &[u8]) {
 
     let start = std::time::Instant::now();
     if let Some((low, high)) = index.search(query) {
-        for i in (low..high).rev() {
-            println!("{}", index.suffix_array()[i as usize]);
+        if list_all_outputs {
+            for i in (low..high).rev() {
+                println!("{}", index.suffix_array()[i as usize]);
+            }
+        } else {
+            println!("low={}, high={}", low, high);
         }
     } else {
         eprintln!("No results");
@@ -87,7 +91,13 @@ fn main() {
         .subcommand(
             clap::Command::new("search")
                 .arg(clap::arg!(<index> "Input index file").required(true))
-                .arg(clap::arg!(<query> "Query string").required(true)),
+                .arg(clap::arg!(<query> "Query string").required(true))
+                .arg(
+                    clap::Arg::new("no-list-all-outputs")
+                        .long("no-list-all-outputs")
+                        .help("Do not print every matching suffix-array position")
+                        .action(clap::ArgAction::SetTrue),
+                ),
         )
         .subcommand(
             clap::Command::new("search-many")
@@ -127,8 +137,9 @@ fn main() {
         ("search", matches) => {
             let index = matches.get_one::<String>("index").unwrap();
             let query = matches.get_one::<String>("query").unwrap();
+            let list_all_outputs = !matches.get_flag("no-list-all-outputs");
 
-            search(Path::new(index), query.as_bytes());
+            search(Path::new(index), query.as_bytes(), list_all_outputs);
         }
         ("search-many", matches) => {
             let index = matches.get_one::<String>("index").unwrap();
