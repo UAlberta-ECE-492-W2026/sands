@@ -26,6 +26,7 @@ Run actions across the entire repository.
 Usage:  $0 setup-venv  Setup your local venv
         $0 tests       Run all tests
         $0 sv-tests    Run only the fmindex_sv compatibility tests
+        $0 sv-benchmark Run the fmindex_sv cycle benchmark
         $0 check       Typecheck all code
         $0 run-local   Run locally (with docker-compose)
         $0 index-seq   Generate a sequence and build an SV index
@@ -78,6 +79,10 @@ tests() {
 
 sv-tests() {
   fmindex_sv/test.sh
+}
+
+sv-benchmark() {
+  fmindex_sv/benchmark.sh
 }
 
 check() {

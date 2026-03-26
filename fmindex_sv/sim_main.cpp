@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <cstdlib>
 #include <iostream>
 #include <cstdio>
 #include <string>
@@ -69,6 +70,8 @@ int main(int argc, char **argv) {
     bool input_closed = false;
     bool search_active = false;
     int start_cooldown = 0;
+    const bool benchmark_mode = std::getenv("FMINDEX_BENCHMARK") != nullptr;
+    vluint64_t search_start_time = 0;
 
     // STEP 3.2: innitialize waveform
     Verilated::traceEverOn(true);
@@ -117,6 +120,7 @@ int main(int argc, char **argv) {
             top->start = 1;
             top->reset = 0;
             search_active = true;
+            search_start_time = main_time;
         } else {
             top->start = 0;
         }
@@ -134,10 +138,16 @@ int main(int argc, char **argv) {
 
         if (top->done) {
             printf("DONE: l=%d, r=%d\n", top->l_out, top->r_out);
+            if (benchmark_mode) {
+                printf("CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - search_start_time + 1));
+            }
             search_active = false;
             start_cooldown = 1;
         } else if (top->fail) {
             printf("FAIL\n");
+            if (benchmark_mode) {
+                printf("CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - search_start_time + 1));
+            }
             search_active = false;
             start_cooldown = 1;
         }
