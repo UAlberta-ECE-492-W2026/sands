@@ -8,8 +8,10 @@
 #include <iostream>
 #include <cstdio>
 #include <string>
-#include <fstream>
 #include <cstring>
+#include <deque>
+#include <cerrno>
+#include <sys/stat.h>
 
 #define SIM_LENGTH 10000000 // edit this value to change siumulation length
 #ifndef PAT_MAX_LEN
@@ -43,14 +45,10 @@ int main(int argc, char **argv) {
     }
 
     // STEP 2: create new pipe file
-    std::ofstream MyFile(file);
-
-    if (!MyFile.is_open()) {
-        printf("Error creating file");
+    if (mkfifo(file, 0600) != 0) {
+        perror("mkfifo");
         return 1;
     }
-
-    MyFile.close();
 
     // STEP 3: setup verilator simulation
     // STEP 3.1: innitialize verilator sim and memory pipe
@@ -58,6 +56,19 @@ int main(int argc, char **argv) {
     auto* top = new Vtop;
 
     int pipe_fd = open("mem_pipe", O_RDONLY);
+    if (pipe_fd < 0) {
+        perror("open");
+        return 1;
+    }
+    int flags = fcntl(pipe_fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(pipe_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        perror("fcntl");
+        return 1;
+    }
+    std::deque<Cmd> pending;
+    bool input_closed = false;
+    bool search_active = false;
+    int start_cooldown = 0;
 
     // STEP 3.2: innitialize waveform
     Verilated::traceEverOn(true);
@@ -73,21 +84,44 @@ int main(int argc, char **argv) {
     // STEP 4: run verilator simulation
     while (!Verilated::gotFinish()) {
 
-        Cmd cmd;
-
         // STEP 4.1: read from pipe
-        int r = read(pipe_fd, &cmd, sizeof(cmd));
+        if (!input_closed) {
+            while (true) {
+                Cmd cmd;
+                int r = read(pipe_fd, &cmd, sizeof(cmd));
+                if (r == static_cast<int>(sizeof(cmd))) {
+                    pending.push_back(cmd);
+                } else if (r == 0) {
+                    input_closed = true;
+                    break;
+                } else if (r < 0 && errno == EAGAIN) {
+                    break;
+                } else if (r > 0) {
+                    printf("Short read from pipe: %d bytes\n", r);
+                    break;
+                } else {
+                    perror("read");
+                    break;
+                }
+            }
+        }
 
-        // STEP 4.2: if data sent from pipe, add data to memory and start algorithm
-        if (r == sizeof(cmd)) {
+        if (start_cooldown > 0) {
+            start_cooldown--;
+        } else if (!search_active && !pending.empty()) {
+            Cmd cmd = pending.front();
+            pending.pop_front();
             printf("Received: length=%u\n", cmd.pat_len);
             std::memcpy(top->pattern.data(), cmd.pattern, sizeof(cmd.pattern));
             top->pat_len_in = cmd.pat_len;
             top->start = 1;
             top->reset = 0;
+            search_active = true;
+        } else {
+            top->start = 0;
         }
 
-        // STEP 4.3: simulate rising edge of clock
+        // STEP 4.2: simulate rising edge of clock
         top->clk = 0;
         top->eval();
         //tfp->dump(main_time);
@@ -100,9 +134,15 @@ int main(int argc, char **argv) {
 
         if (top->done) {
             printf("DONE: l=%d, r=%d\n", top->l_out, top->r_out);
-            break;
+            search_active = false;
+            start_cooldown = 1;
         } else if (top->fail) {
             printf("FAIL\n");
+            search_active = false;
+            start_cooldown = 1;
+        }
+
+        if (input_closed && pending.empty() && !search_active) {
             break;
         }
 

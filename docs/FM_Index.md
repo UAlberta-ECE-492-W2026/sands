@@ -10,7 +10,7 @@ The design is split into two parts:
 ## States Overview
 
 - `IDLE` waits for `start` to go high.
-- `INIT` kicks off the first RAM read for the magic word at address `0`.
+- `INIT` performs the one-time bootstrap after reset, loading the header words from addresses `0`, `1`, and `2`.
 - `MEM_WAIT` is a sub-state machine that waits until the delayed response for
   the current memory operation arrives, then decides what request or update
   comes next.
@@ -47,7 +47,8 @@ stateDiagram-v2
 
     [*] --> IDLE
 
-    IDLE --> INIT: start
+    IDLE --> INIT: first start after reset
+    IDLE --> READ_CHAR: later starts after bootstrap
     INIT --> MEM_WAIT: bootstrap read
     MEM_WAIT --> READ_CHAR: init complete
     READ_CHAR --> CHECK: char == 0 and loop_count == 0
@@ -83,9 +84,9 @@ The `mem_op` field tells `MEM_WAIT` what to do when the response becomes availab
 ## State and Sequence Diagram
 
 The sequence diagram shows the request order and the state transitions into and
-out of `MEM_WAIT`. The bootstrap phase uses the first three header words, then
-the operational phase reuses `MEM_WAIT` for the recurring `Occ` and `C` lookups
-during backward search.
+out of `MEM_WAIT`. The bootstrap phase uses the first three header words once
+after reset, then later pattern starts jump directly into `READ_CHAR` and reuse
+`MEM_WAIT` for the recurring `Occ` and `C` lookups during backward search.
 
 Note the bootstrap addresses (header fields) which are read before alignment:
 - `addr 0`: `INDEX_MAGIC`

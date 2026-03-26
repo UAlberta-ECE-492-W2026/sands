@@ -22,8 +22,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--pattern",
-        default="CCCGT",
-        help="DNA pattern string using A/C/G/T; defaults to CCCGT",
+        action="append",
+        default=None,
+        help="DNA pattern string using A/C/G/T; repeat to send multiple patterns",
     )
     return parser.parse_args()
 
@@ -41,35 +42,36 @@ lookup = {
     "T": 4,
 }
 
-for ch in args.pattern:
-    if ch not in lookup:
-        raise ValueError(f"pattern contains invalid character {ch!r}")
-
-pat_codes = [lookup[ch] for ch in args.pattern]
-
 repeat = int(os.environ.get("FMINDEX_REPEAT", "1"))
 sleep_s = float(os.environ.get("FMINDEX_SLEEP_SECS", "0"))
-pat_len = len(pat_codes)
-
-if pat_len > PAT_MAX_LEN:
-    raise ValueError("pattern is longer than PAT_MAX_LEN")
-
-pattern_bits = 0
-for idx, code in enumerate(reversed(pat_codes)):
-    bit_pos = (PAT_MAX_LEN - 1 - idx) * CHAR_WIDTH
-    pattern_bits |= code << bit_pos
-
-pattern_words = [
-    (pattern_bits >> (32 * word_idx)) & 0xFFFFFFFF
-    for word_idx in range(PAT_WORDS)
-]
+patterns = args.pattern if args.pattern is not None else ["CCCGT"]
 
 while i < repeat:
     i += 1
-    packet = struct.pack(f"<{PAT_WORDS + 1}I", pat_len, *pattern_words)
+    for pattern in patterns:
+        for ch in pattern:
+            if ch not in lookup:
+                raise ValueError(f"pattern contains invalid character {ch!r}")
 
-    pipe.write(packet)
-    pipe.flush()
+        pat_codes = [lookup[ch] for ch in pattern]
+        pat_len = len(pat_codes)
+
+        if pat_len > PAT_MAX_LEN:
+            raise ValueError("pattern is longer than PAT_MAX_LEN")
+
+        pattern_bits = 0
+        for idx, code in enumerate(reversed(pat_codes)):
+            bit_pos = (PAT_MAX_LEN - 1 - idx) * CHAR_WIDTH
+            pattern_bits |= code << bit_pos
+
+        pattern_words = [
+            (pattern_bits >> (32 * word_idx)) & 0xFFFFFFFF
+            for word_idx in range(PAT_WORDS)
+        ]
+        packet = struct.pack(f"<{PAT_WORDS + 1}I", pat_len, *pattern_words)
+
+        pipe.write(packet)
+        pipe.flush()
 
     if sleep_s:
         time.sleep(sleep_s)

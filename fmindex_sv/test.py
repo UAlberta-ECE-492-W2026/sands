@@ -21,8 +21,7 @@ SEED = 0x6B6D6B6D5F737663
 class CaseSpec:
     name: str
     sequence: str
-    query: str | None = None
-    compare_rust: bool = False
+    patterns: tuple[str, ...]
 
 
 def run(
@@ -103,17 +102,21 @@ def run_rust_search(bin_path: Path, index_path: Path, query: str, cwd: Path) -> 
     return parse_rust_search(proc.stdout, proc.stderr)
 
 
-def parse_sv_search(output: str) -> tuple[int, int] | None:
+def parse_sv_searches(output: str) -> list[tuple[int, int] | None]:
+    results: list[tuple[int, int] | None] = []
     for line in output.splitlines():
         line = line.strip()
         if not line:
             continue
         if line == "FAIL":
-            return None
+            results.append(None)
+            continue
         match = re.fullmatch(r"DONE: l=(\d+), r=(\d+)", line)
         if match:
-            return int(match.group(1)), int(match.group(2))
-    raise ValueError(f"could not parse fmindex_sv output:\n{output}")
+            results.append((int(match.group(1)), int(match.group(2))))
+    if not results:
+        raise ValueError(f"could not parse fmindex_sv output:\n{output}")
+    return results
 
 
 def build_index(bin_path: Path, seq_path: Path, out_path: Path, subcommand: str) -> None:
@@ -126,9 +129,9 @@ def build_index(bin_path: Path, seq_path: Path, out_path: Path, subcommand: str)
 def run_sv(
     repo_root: Path,
     index_path: Path,
-    pattern: str | None,
+    patterns: tuple[str, ...],
     rebuild: bool,
-) -> tuple[int, int] | None:
+) -> list[tuple[int, int] | None]:
     env = {
         "INDEX_BIN": str(index_path),
         "FMINDEX_REPEAT": "1",
@@ -139,7 +142,7 @@ def run_sv(
         env["SV_REBUILD"] = "1"
 
     args = ["./run.sh"]
-    if pattern is not None:
+    for pattern in patterns:
         args.extend(["--pattern", pattern])
 
     proc = subprocess.run(
@@ -153,7 +156,7 @@ def run_sv(
         raise RuntimeError(
             f"fmindex_sv/run.sh failed\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
-    return parse_sv_search(proc.stdout)
+    return parse_sv_searches(proc.stdout)
 
 
 def run_case(
@@ -172,36 +175,33 @@ def run_case(
 
     build_index(fmindexer_bin, seq_path, sv_index_path, "build-sim")
 
-    rust_result: tuple[int, int] | None = None
-    if case.compare_rust:
-        rust_index_path = case_dir / "rust.fmi"
-        build_index(fmindexer_bin, seq_path, rust_index_path, "build")
-        rust_result = run_rust_search(
+    rust_index_path = case_dir / "rust.fmi"
+    build_index(fmindexer_bin, seq_path, rust_index_path, "build")
+    rust_results = [
+        run_rust_search(
             fmindexer_bin,
             rust_index_path,
-            case.query or "",
+            pattern,
             repo_root / "fmindexer.rs",
         )
+        for pattern in case.patterns
+    ]
 
     sv_result = run_sv(
         repo_root,
         sv_index_path,
-        case.query,
+        case.patterns,
         rebuild=rebuild,
     )
 
-    if case.compare_rust:
-        assert case.query is not None
-        if rust_result != sv_result:
-            raise AssertionError(
-                f"case {case.name} diverged\n"
-                f"sequence: {case.sequence}\n"
-                f"query: {case.query}\n"
-                f"rust: {rust_result}\n"
-                f"sv: {sv_result}\n"
-            )
-    else:
-        raise AssertionError(f"case {case.name} has no assertion mode")
+    if rust_results != sv_result:
+        raise AssertionError(
+            f"case {case.name} diverged\n"
+            f"sequence: {case.sequence}\n"
+            f"patterns: {case.patterns}\n"
+            f"rust: {rust_results}\n"
+            f"sv: {sv_result}\n"
+        )
 
 
 def make_compatibility_cases(rng: random.Random) -> list[CaseSpec]:
@@ -213,8 +213,7 @@ def make_compatibility_cases(rng: random.Random) -> list[CaseSpec]:
             CaseSpec(
                 name=f"compat-{case_idx}",
                 sequence=rand_sequence(rng, seq_len),
-                query=rand_query(rng, query_len),
-                compare_rust=True,
+                patterns=(rand_query(rng, query_len),),
             )
         )
     return cases
@@ -223,15 +222,30 @@ def make_compatibility_cases(rng: random.Random) -> list[CaseSpec]:
 def make_empty_sequence_cases() -> list[CaseSpec]:
     seq = ""
     return [
-        CaseSpec(name="empty-seq-a", sequence=seq, query="A", compare_rust=True),
-        CaseSpec(name="empty-seq-ac", sequence=seq, query="AC", compare_rust=True),
+        CaseSpec(name="empty-seq-a", sequence=seq, patterns=("A",)),
+        CaseSpec(name="empty-seq-ac", sequence=seq, patterns=("AC",)),
     ]
 
 
 def make_empty_pattern_cases() -> list[CaseSpec]:
     return [
-        CaseSpec(name="empty-pattern", sequence="ACGT", query="", compare_rust=True),
-        CaseSpec(name="empty-pattern-empty-seq", sequence="", query="", compare_rust=True),
+        CaseSpec(name="empty-pattern", sequence="ACGT", patterns=("",)),
+        CaseSpec(name="empty-pattern-empty-seq", sequence="", patterns=("",)),
+    ]
+
+
+def make_multi_pattern_cases() -> list[CaseSpec]:
+    return [
+        CaseSpec(
+            name="multi-pattern-a",
+            sequence="ACGTACGT",
+            patterns=("AC", "GT"),
+        ),
+        CaseSpec(
+            name="multi-pattern-b",
+            sequence="GATTACA",
+            patterns=("GA", "", "TA"),
+        ),
     ]
 
 
@@ -291,8 +305,16 @@ def main() -> int:
             tmpdir,
             rebuild_first_case=False,
         )
+        run_suite(
+            "multi-pattern",
+            make_multi_pattern_cases(),
+            repo_root,
+            fmindexer_bin,
+            tmpdir,
+            rebuild_first_case=False,
+        )
 
-    print(f"PASS: compatibility={CASES}, empty-sequence=2, empty-pattern=2")
+    print(f"PASS: compatibility={CASES}, empty-sequence=2, empty-pattern=2, multi-pattern=2")
     return 0
 
 

@@ -60,6 +60,7 @@ typedef struct packed {
     logic [`IDX_WIDTH-1:0] rank_r;
     logic [PAT_IDX_W-1:0] pat_idx;
     logic [LOOP_COUNT_W-1:0] loop_count;
+    logic boot_done;
     mem_op_t mem_op;
     logic [RAM_WAIT_W-1:0] mem_wait;
 } search_t;
@@ -117,8 +118,10 @@ assign char = pattern[cur.pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
 always_comb begin
     case (state)
     IDLE: begin
-        if (start == 1)
+        if (start == 1 && !cur.boot_done)
             next_state = INIT;
+        else if (start == 1)
+            next_state = READ_CHAR;
         else
             next_state = IDLE;
     end
@@ -255,6 +258,19 @@ always_comb begin
         nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
     end
 
+    IDLE: begin
+        if (start == 1 && cur.boot_done) begin
+            nxt.l = `IDX_WIDTH'd0;
+            nxt.r = cur.seq_len;
+            nxt.loop_count = pat_len_in;
+            nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+            nxt.rank_l = '0;
+            nxt.rank_r = '0;
+            nxt.mem_op = OP_RANK_L;
+            nxt.mem_wait = '0;
+        end
+    end
+
     READ_CHAR: begin
         if (char != 0) begin
             nxt.loop_count = cur.loop_count - 1'b1;
@@ -289,6 +305,7 @@ always_comb begin
                 nxt.r = cur.seq_len;
                 nxt.loop_count = pat_len_in;
                 nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+                nxt.boot_done = 1'b1;
                 nxt.mem_op = OP_INIT_MAGIC;
             end
 
