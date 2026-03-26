@@ -8,3 +8,6 @@ waveform.vcd
 vhdl_old/
 
 mem_pipe
+
+# Test FM index (created by fmindexer.rs)
+index.bin
