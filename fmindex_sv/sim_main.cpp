@@ -100,8 +100,10 @@ int main(int argc, char **argv) {
 
         if (top->done) {
             printf("DONE: l=%d, r=%d\n", top->l_out, top->r_out);
+            break;
         } else if (top->fail) {
             printf("FAIL\n");
+            break;
         }
 
         main_time++;
@@ -118,4 +120,5 @@ int main(int argc, char **argv) {
 
     //tfp->close();
     delete top;
+    return 0;
 }

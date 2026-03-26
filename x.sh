@@ -25,6 +25,7 @@ Run actions across the entire repository.
 
 Usage:  $0 setup-venv  Setup your local venv
         $0 tests       Run all tests
+        $0 sv-tests    Run only the fmindex_sv compatibility tests
         $0 check       Typecheck all code
         $0 run-local   Run locally (with docker-compose)
         $0 index-seq   Generate a sequence and build an SV index
@@ -70,6 +71,13 @@ tests() {
   pushd fmindexer.rs >/dev/null
   test/run.sh
   popd
+
+  _header 'Running fmindex_sv compatibility tests'
+  fmindex_sv/test.sh
+}
+
+sv-tests() {
+  fmindex_sv/test.sh
 }
 
 check() {
