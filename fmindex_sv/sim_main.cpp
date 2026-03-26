@@ -11,6 +11,7 @@
 #include <string>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <cerrno>
 #include <sys/stat.h>
 
@@ -27,6 +28,12 @@ vluint64_t main_time = 0;
 struct Cmd {
     uint32_t pat_len;
     uint32_t pattern[PAT_WORDS];
+};
+
+struct Result {
+    bool done;
+    uint32_t l;
+    uint32_t r;
 };
 
 // Required for Verilator when using --timing (do not delete)
@@ -67,11 +74,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     std::deque<Cmd> pending;
+    std::map<uint32_t, Result> completed;
+    std::map<uint32_t, vluint64_t> submit_times;
     bool input_closed = false;
-    bool search_active = false;
-    int start_cooldown = 0;
     const bool benchmark_mode = std::getenv("FMINDEX_BENCHMARK") != nullptr;
-    vluint64_t search_start_time = 0;
+    uint32_t next_submit_id = 0;
+    uint32_t next_print_id = 0;
+    bool batch_started = false;
+    vluint64_t batch_start_time = 0;
 
     // STEP 3.2: innitialize waveform
     Verilated::traceEverOn(true);
@@ -80,9 +90,11 @@ int main(int argc, char **argv) {
     //tfp->open("waveform.vcd");
 
     // STEP 3.3: starting values for simulation
-    top->start = 0;
+    top->query_valid = 0;
+    top->query_id = 0;
     top->reset = 1;
     top->eval();
+    top->reset = 0;
 
     // STEP 4: run verilator simulation
     while (!Verilated::gotFinish()) {
@@ -109,20 +121,22 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (start_cooldown > 0) {
-            start_cooldown--;
-        } else if (!search_active && !pending.empty()) {
+        if (!pending.empty() && top->query_ready) {
             Cmd cmd = pending.front();
             pending.pop_front();
             printf("Received: length=%u\n", cmd.pat_len);
-            std::memcpy(top->pattern.data(), cmd.pattern, sizeof(cmd.pattern));
-            top->pat_len_in = cmd.pat_len;
-            top->start = 1;
-            top->reset = 0;
-            search_active = true;
-            search_start_time = main_time;
+            std::memcpy(top->query_pattern.data(), cmd.pattern, sizeof(cmd.pattern));
+            top->query_pat_len = cmd.pat_len;
+            top->query_id = next_submit_id;
+            top->query_valid = 1;
+            if (!batch_started) {
+                batch_started = true;
+                batch_start_time = main_time;
+            }
+            submit_times[next_submit_id] = main_time;
+            next_submit_id++;
         } else {
-            top->start = 0;
+            top->query_valid = 0;
         }
 
         // STEP 4.2: simulate rising edge of clock
@@ -134,25 +148,43 @@ int main(int argc, char **argv) {
         top->eval();
         //tfp->dump(main_time);
 
-        top->start = 0;
+        top->query_valid = 0;
 
-        if (top->done) {
-            printf("DONE: l=%d, r=%d\n", top->l_out, top->r_out);
+        if (top->result_valid) {
+            completed.emplace(
+                top->result_query_id,
+                Result{
+                    top->result_done,
+                    static_cast<uint32_t>(top->l_out),
+                    static_cast<uint32_t>(top->r_out),
+                }
+            );
             if (benchmark_mode) {
-                printf("CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - search_start_time + 1));
+                auto it = submit_times.find(top->result_query_id);
+                if (it != submit_times.end()) {
+                    printf("CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - it->second + 1));
+                }
             }
-            search_active = false;
-            start_cooldown = 1;
-        } else if (top->fail) {
-            printf("FAIL\n");
-            if (benchmark_mode) {
-                printf("CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - search_start_time + 1));
-            }
-            search_active = false;
-            start_cooldown = 1;
         }
 
-        if (input_closed && pending.empty() && !search_active) {
+        while (true) {
+            auto it = completed.find(next_print_id);
+            if (it == completed.end()) {
+                break;
+            }
+            if (it->second.done) {
+                printf("DONE: l=%u, r=%u\n", it->second.l, it->second.r);
+            } else {
+                printf("FAIL\n");
+            }
+            completed.erase(it);
+            next_print_id++;
+        }
+
+        if (input_closed && pending.empty() && next_print_id == next_submit_id && completed.empty()) {
+            if (benchmark_mode && batch_started) {
+                printf("BATCH_CYCLES\t%llu\n", static_cast<unsigned long long>(main_time - batch_start_time + 1));
+            }
             break;
         }
 

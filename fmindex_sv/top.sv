@@ -11,11 +11,18 @@ module top #(
     input logic clk,
 
     input logic reset,
-    input logic start,
+    input logic query_valid,
+    input logic [31:0] query_id,
 
-    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
-    input logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len_in,
+    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] query_pattern,
+    input logic [$clog2(PAT_MAX_LEN+1)-1:0] query_pat_len,
 
+    output logic query_ready,
+
+    output logic result_valid,
+    output logic result_done,
+    output logic result_fail,
+    output logic [31:0] result_query_id,
     output logic [`IDX_WIDTH-1:0] l_out,
     output logic [`IDX_WIDTH-1:0] r_out,
 
@@ -29,16 +36,24 @@ logic ram_req;
 
 FM_Index #(
     .PAT_MAX_LEN(PAT_MAX_LEN),
+    .NUM_SLOTS(RAM_FIFO_DEPTH),
+    .RAM_FIFO_DEPTH(RAM_FIFO_DEPTH),
     .RAM_DELAY_CYCLES(RAM_DELAY_CYCLES)
 ) dut (
     .clk(clk),
     .reset(reset),
-    .start(start),
-    .pattern(pattern),
-    .pat_len_in(pat_len_in),
+    .query_valid(query_valid),
+    .query_id(query_id),
+    .query_pattern(query_pattern),
+    .query_pat_len(query_pat_len),
+    .query_ready(query_ready),
     .ram_req(ram_req),
     .ram_addr(addr),
     .ram_data(data),
+    .result_valid(result_valid),
+    .result_done(result_done),
+    .result_fail(result_fail),
+    .result_query_id(result_query_id),
     .done(done),
     .fail(fail),
     .l_out(l_out),

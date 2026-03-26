@@ -6,63 +6,92 @@ localparam logic [31:0] INDEX_MAGIC = 32'h3144_4946; // "FID1" in little-endian 
 
 module FM_Index #(
     parameter int PAT_MAX_LEN = 150,
+    parameter int NUM_SLOTS = 4,
+    parameter int RAM_FIFO_DEPTH = 4,
     parameter int RAM_DELAY_CYCLES = 8
 ) (
     input logic clk,
     input logic reset,
-    input logic start,
 
-    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
-    input logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len_in,
+    input logic query_valid,
+    input logic [31:0] query_id,
+    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] query_pattern,
+    input logic [$clog2(PAT_MAX_LEN+1)-1:0] query_pat_len,
+    output logic query_ready,
 
     output logic ram_req,
     input logic [`IDX_WIDTH-1:0] ram_data,
     output logic [31:0] ram_addr,
 
-    output logic done,
-    output logic fail,
-
+    output logic result_valid,
+    output logic result_done,
+    output logic result_fail,
+    output logic [31:0] result_query_id,
     output logic [`IDX_WIDTH-1:0] l_out,
-    output logic [`IDX_WIDTH-1:0] r_out
+    output logic [`IDX_WIDTH-1:0] r_out,
+
+    output logic done,
+    output logic fail
 );
 
-localparam int PAT_IDX_W = $clog2(PAT_MAX_LEN);
+localparam int PAT_IDX_W = (PAT_MAX_LEN <= 1) ? 1 : $clog2(PAT_MAX_LEN);
 localparam int LOOP_COUNT_W = $clog2(PAT_MAX_LEN + 1);
-localparam int RAM_WAIT_CYCLES = (RAM_DELAY_CYCLES < 1) ? 1 : RAM_DELAY_CYCLES;
-localparam int RAM_WAIT_W = $clog2(RAM_WAIT_CYCLES + 1);
+localparam int SLOT_W = (NUM_SLOTS <= 1) ? 1 : $clog2(NUM_SLOTS);
+localparam int REQ_FIFO_DEPTH = (RAM_FIFO_DEPTH < 1) ? 1 : RAM_FIFO_DEPTH;
+localparam int PIPE_DEPTH = (RAM_DELAY_CYCLES < 1) ? 1 : (RAM_DELAY_CYCLES + 1);
+localparam int FIFO_W = $clog2(REQ_FIFO_DEPTH + 1);
 
 typedef enum logic [2:0] {
-    IDLE,
-    INIT,
-    READ_CHAR,
-    MEM_WAIT,
-    CHECK,
-    DONE_S,
-    FAIL_S
-} state_t;
+    BOOT_MAGIC_REQ,
+    BOOT_MAGIC_WAIT,
+    BOOT_LEN_REQ,
+    BOOT_LEN_WAIT,
+    BOOT_ALPHA_REQ,
+    BOOT_ALPHA_WAIT,
+    BOOT_DONE
+} boot_state_t;
 
-typedef enum logic {
-    PIPE_INIT,
-    PIPE_SEARCH
-} pipe_kind_t;
+typedef enum logic [3:0] {
+    SLOT_FREE,
+    SLOT_READ_CHAR,
+    SLOT_WAIT_OCC_L,
+    SLOT_READY_OCC_R,
+    SLOT_WAIT_OCC_R,
+    SLOT_READY_C_BASE,
+    SLOT_WAIT_C_BASE,
+    SLOT_DONE,
+    SLOT_FAIL
+} slot_state_t;
+
+typedef enum logic [2:0] {
+    REQ_BOOT_MAGIC,
+    REQ_BOOT_LEN,
+    REQ_BOOT_ALPHA,
+    REQ_OCC_L,
+    REQ_OCC_R,
+    REQ_C_BASE
+} req_kind_t;
 
 typedef struct packed {
-    logic [31:0] magic;
-    logic [31:0] seq_len;
-    logic [31:0] sigma_m1;
-    logic [`IDX_WIDTH-1:0] l;
-    logic [`IDX_WIDTH-1:0] r;
-    logic [`IDX_WIDTH-1:0] rank_l;
-    logic [`IDX_WIDTH-1:0] rank_r;
-    logic [`IDX_WIDTH-1:0] c_base;
+    logic valid;
+    req_kind_t kind;
+    logic [SLOT_W-1:0] slot;
+} req_t;
+
+typedef struct packed {
+    logic [31:0] query_id;
+    logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern;
+    logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len;
     logic [PAT_IDX_W-1:0] pat_idx;
     logic [LOOP_COUNT_W-1:0] loop_count;
-    logic boot_done;
-    pipe_kind_t pipe_kind;
-    logic [1:0] pipe_issue;
-    logic [1:0] pipe_resp;
-    logic [RAM_WAIT_W-1:0] mem_wait;
-} search_t;
+    logic [`CHAR_WIDTH-1:0] cur_char;
+    logic [31:0] l;
+    logic [31:0] r;
+    logic [31:0] rank_l;
+    logic [31:0] rank_r;
+    logic [31:0] c_base;
+    slot_state_t state;
+} slot_t;
 
 function automatic logic [31:0] occ_addr(
     input logic [`CHAR_WIDTH-1:0] char,
@@ -87,293 +116,372 @@ function automatic logic [31:0] c_arr_addr(
     end
 endfunction
 
-state_t state, next_state;
-search_t cur, nxt;
+function automatic logic [`CHAR_WIDTH-1:0] slot_char(
+    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
+    input logic [PAT_IDX_W-1:0] pat_idx
+);
+    begin
+        slot_char = pattern[pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
+    end
+endfunction
 
-// Logging
-`ifdef VERILATOR
-always_ff @(negedge clk) begin
-    case (state)
-    INIT: $display("INIT");
-    READ_CHAR: $display("READ_CHAR c=%d", char);
-    MEM_WAIT: $display("MEM_WAIT wait=%0d kind=%0d issue=%0d resp=%0d", cur.mem_wait, cur.pipe_kind, cur.pipe_issue, cur.pipe_resp);
-    CHECK: $display("CHECK");
-    DONE_S: $display("DONE_S");
-    FAIL_S: $display("FAIL_S");
-    default: ;
-    endcase
-end
-`endif
+function automatic logic is_terminal(input slot_state_t state);
+    begin
+        is_terminal = (state == SLOT_DONE) || (state == SLOT_FAIL);
+    end
+endfunction
 
-always_ff @(posedge clk) begin
-    if (reset) state <= IDLE;
-    else state <= next_state;
-end
+function automatic logic slot_can_issue(input slot_state_t state);
+    begin
+        slot_can_issue = (state == SLOT_READ_CHAR)
+            || (state == SLOT_READY_OCC_R)
+            || (state == SLOT_READY_C_BASE);
+    end
+endfunction
 
-logic [`CHAR_WIDTH-1:0] char;
-assign char = pattern[cur.pat_idx*`CHAR_WIDTH +: `CHAR_WIDTH];
+function automatic int wrap_idx(
+    input int base,
+    input int offset
+);
+    int idx;
+    begin
+        idx = base + offset;
+        if (idx >= NUM_SLOTS) begin
+            idx -= NUM_SLOTS;
+        end
+        wrap_idx = idx;
+    end
+endfunction
 
-// Next state
+boot_state_t boot_state, boot_state_n;
+logic [31:0] seq_len, seq_len_n;
+logic [31:0] sigma_m1, sigma_m1_n;
+logic [SLOT_W-1:0] alloc_ptr, alloc_ptr_n;
+logic [SLOT_W-1:0] rr_ptr, rr_ptr_n;
+logic [SLOT_W-1:0] emit_ptr, emit_ptr_n;
+logic [FIFO_W-1:0] pending_count, pending_count_n;
+
+slot_t slots [NUM_SLOTS];
+slot_t slots_n [NUM_SLOTS];
+
+req_t req_pipe [PIPE_DEPTH];
+req_t req_pipe_n [PIPE_DEPTH];
+
+logic query_ready_n;
+logic result_valid_n;
+logic result_done_n;
+logic result_fail_n;
+logic [31:0] result_query_id_n;
+logic [`IDX_WIDTH-1:0] result_l_n;
+logic [`IDX_WIDTH-1:0] result_r_n;
+logic [SLOT_W-1:0] issue_slot;
+req_kind_t issue_kind;
+logic issue_valid;
+logic [31:0] issue_addr;
+logic [SLOT_W-1:0] resp_slot;
+req_kind_t resp_kind;
+logic resp_valid;
+
 always_comb begin
-    case (state)
-    IDLE: begin
-        if (start == 1 && !cur.boot_done)
-            next_state = INIT;
-        else if (start == 1)
-            next_state = READ_CHAR;
-        else
-            next_state = IDLE;
+    boot_state_n = boot_state;
+    seq_len_n = seq_len;
+    sigma_m1_n = sigma_m1;
+    alloc_ptr_n = alloc_ptr;
+    rr_ptr_n = rr_ptr;
+    emit_ptr_n = emit_ptr;
+    pending_count_n = pending_count;
+
+    for (int i = 0; i < NUM_SLOTS; i++) begin
+        slots_n[i] = slots[i];
     end
 
-    INIT: next_state = MEM_WAIT;
-
-    READ_CHAR: begin
-        if (char == 0) begin
-            if (cur.loop_count == 0)
-                // End of input: the remaining padding is all zeros.
-                next_state = CHECK;
-            else
-                // Unexpected zero before the pattern is fully consumed.
-                next_state = FAIL_S;
-        end else begin
-            next_state = MEM_WAIT;
-        end
+    for (int i = 0; i < PIPE_DEPTH; i++) begin
+        req_pipe_n[i].valid = 1'b0;
+        req_pipe_n[i].kind = REQ_BOOT_MAGIC;
+        req_pipe_n[i].slot = '0;
     end
 
-    MEM_WAIT: begin
-        if (cur.mem_wait != 0) begin
-            next_state = MEM_WAIT;
-        end else begin
-            case (cur.pipe_kind)
-            PIPE_INIT: begin
-                case (cur.pipe_resp)
-                2'd0: begin
-                    if (ram_data != INDEX_MAGIC)
-                        next_state = FAIL_S;
-                    else
-                        next_state = MEM_WAIT;
-                end
-                2'd1: next_state = MEM_WAIT;
-                2'd2: next_state = READ_CHAR;
-                default: next_state = IDLE;
-                endcase
-            end
-
-            PIPE_SEARCH: begin
-                case (cur.pipe_resp)
-                2'd0: next_state = MEM_WAIT;
-                2'd1: next_state = MEM_WAIT;
-                2'd2: next_state = CHECK;
-                default: next_state = IDLE;
-                endcase
-            end
-
-            default: next_state = IDLE;
-            endcase
-        end
-    end
-
-    CHECK: begin
-        if (cur.l >= cur.r) begin
-            next_state = FAIL_S;
-        end else if (cur.loop_count == 0) begin
-            next_state = DONE_S;
-        end else begin
-            next_state = READ_CHAR;
-        end
-    end
-    
-    DONE_S: next_state = IDLE;
-    FAIL_S: next_state = IDLE;
-
-    default: next_state = IDLE;
-    endcase
-end
-
-// Outputs
-assign l_out = cur.l;
-assign r_out = cur.r;
-assign done = state == DONE_S;
-assign fail = state == FAIL_S;
-always_comb begin
+    query_ready_n = 1'b0;
+    result_valid_n = 1'b0;
+    result_done_n = 1'b0;
+    result_fail_n = 1'b0;
+    result_query_id_n = 32'd0;
+    result_l_n = '0;
+    result_r_n = '0;
     ram_req = 1'b0;
     ram_addr = 32'd0;
-    case (state)
-    INIT: begin
-        ram_req = 1'b1;
-        ram_addr = 32'd0;
+    issue_valid = 1'b0;
+    issue_kind = REQ_BOOT_MAGIC;
+    issue_slot = '0;
+    issue_addr = 32'd0;
+    resp_valid = 1'b0;
+    resp_kind = REQ_BOOT_MAGIC;
+    resp_slot = '0;
+
+    // Shift outstanding requests and retire the oldest response first.
+    if (req_pipe[PIPE_DEPTH-1].valid) begin
+        resp_valid = 1'b1;
+        resp_kind = req_pipe[PIPE_DEPTH-1].kind;
+        resp_slot = req_pipe[PIPE_DEPTH-1].slot;
+        pending_count_n = pending_count_n - 1'b1;
     end
 
-    READ_CHAR: begin
-        if (char != 0) begin
-            ram_req = 1'b1;
-            ram_addr = occ_addr(char, cur.l, cur.sigma_m1);
-        end
+    for (int i = PIPE_DEPTH - 1; i > 0; i--) begin
+        req_pipe_n[i] = req_pipe[i-1];
     end
 
-    MEM_WAIT: begin
-        case (cur.pipe_kind)
-        PIPE_INIT: begin
-            case (cur.pipe_issue)
-            2'd1: begin
-                ram_req = 1'b1;
-                ram_addr = 32'd1;
+    // Process the retiring response.
+    if (resp_valid) begin
+        case (resp_kind)
+        REQ_BOOT_MAGIC: begin
+            if (ram_data != INDEX_MAGIC) begin
+                $fatal(1, "FM_Index: bad magic word");
             end
-            2'd2: begin
-                ram_req = 1'b1;
-                ram_addr = 32'd2;
-            end
-            default: begin
-                ram_req = 1'b0;
-                ram_addr = 32'd0;
-            end
-            endcase
+            boot_state_n = BOOT_LEN_REQ;
         end
 
-        PIPE_SEARCH: begin
-            case (cur.pipe_issue)
-            2'd1: begin
-                ram_req = 1'b1;
-                ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
-            end
-            2'd2: begin
-                ram_req = 1'b1;
-                ram_addr = c_arr_addr(char);
-            end
-            default: begin
-                ram_req = 1'b0;
-                ram_addr = 32'd0;
-            end
-            endcase
+        REQ_BOOT_LEN: begin
+            seq_len_n = ram_data;
+            boot_state_n = BOOT_ALPHA_REQ;
         end
 
+        REQ_BOOT_ALPHA: begin
+            sigma_m1_n = ram_data;
+            boot_state_n = BOOT_DONE;
+        end
+
+        REQ_OCC_L: begin
+            slots_n[resp_slot].rank_l = ram_data;
+            slots_n[resp_slot].state = SLOT_READY_OCC_R;
+        end
+
+        REQ_OCC_R: begin
+            slots_n[resp_slot].rank_r = ram_data;
+            slots_n[resp_slot].state = SLOT_READY_C_BASE;
+        end
+
+        REQ_C_BASE: begin
+            logic [31:0] new_l;
+            logic [31:0] new_r;
+            new_l = ram_data + slots_n[resp_slot].rank_l;
+            new_r = ram_data + slots_n[resp_slot].rank_r;
+            slots_n[resp_slot].c_base = ram_data;
+            slots_n[resp_slot].l = new_l;
+            slots_n[resp_slot].r = new_r;
+            if (new_l >= new_r) begin
+                slots_n[resp_slot].state = SLOT_FAIL;
+            end else if (slots_n[resp_slot].loop_count == 0) begin
+                slots_n[resp_slot].state = SLOT_DONE;
+            end else begin
+                slots_n[resp_slot].state = SLOT_READ_CHAR;
+            end
+        end
+
+        default: begin
+            // No-op.
+        end
         endcase
     end
 
-    default: ram_addr = 0;
-    endcase
+    // Any slot that sees the zero padding after exhausting the pattern may
+    // complete immediately without a RAM request.
+    for (int i = 0; i < NUM_SLOTS; i++) begin
+        if (slots_n[i].state == SLOT_READ_CHAR) begin
+            logic [`CHAR_WIDTH-1:0] ch;
+            ch = slot_char(slots_n[i].pattern, slots_n[i].pat_idx);
+            if (ch == 0) begin
+                if (slots_n[i].loop_count == 0) begin
+                    slots_n[i].state = SLOT_DONE;
+                end else begin
+                    slots_n[i].state = SLOT_FAIL;
+                end
+            end
+        end
+    end
+
+    // Issue the bootstrap reads before any search traffic.
+    if (boot_state_n != BOOT_DONE && pending_count_n < FIFO_W'(REQ_FIFO_DEPTH)) begin
+        unique case (boot_state_n)
+        BOOT_MAGIC_REQ: begin
+            issue_valid = 1'b1;
+            issue_kind = REQ_BOOT_MAGIC;
+            issue_addr = 32'd0;
+            boot_state_n = BOOT_MAGIC_WAIT;
+        end
+
+        BOOT_LEN_REQ: begin
+            issue_valid = 1'b1;
+            issue_kind = REQ_BOOT_LEN;
+            issue_addr = 32'd1;
+            boot_state_n = BOOT_LEN_WAIT;
+        end
+
+        BOOT_ALPHA_REQ: begin
+            issue_valid = 1'b1;
+            issue_kind = REQ_BOOT_ALPHA;
+            issue_addr = 32'd2;
+            boot_state_n = BOOT_ALPHA_WAIT;
+        end
+
+        default: begin
+            // Waiting on an outstanding bootstrap request.
+        end
+        endcase
+    end
+
+    // Otherwise, look for one search request to issue. This is round-robin
+    // so that multiple in-flight queries can share the same RAM queue.
+    if (!issue_valid && boot_state_n == BOOT_DONE && pending_count_n < FIFO_W'(REQ_FIFO_DEPTH)) begin
+        for (int offset = 0; offset < NUM_SLOTS; offset++) begin
+            int idx;
+            idx = wrap_idx(int'(rr_ptr), offset);
+            if (!issue_valid && slot_can_issue(slots_n[idx].state)) begin
+                logic [`CHAR_WIDTH-1:0] ch;
+                ch = slot_char(slots_n[idx].pattern, slots_n[idx].pat_idx);
+                if (slots_n[idx].state == SLOT_READ_CHAR) begin
+                    if (ch != 0) begin
+                        issue_valid = 1'b1;
+                        issue_kind = REQ_OCC_L;
+                        issue_slot = idx[SLOT_W-1:0];
+                        issue_addr = occ_addr(ch, slots_n[idx].l, sigma_m1_n);
+                        slots_n[idx].cur_char = ch;
+                        slots_n[idx].state = SLOT_WAIT_OCC_L;
+                        slots_n[idx].loop_count = slots_n[idx].loop_count - 1'b1;
+                        slots_n[idx].pat_idx = slots_n[idx].pat_idx - 1'b1;
+                        rr_ptr_n = (idx == NUM_SLOTS - 1) ? SLOT_W'(0) : SLOT_W'(idx + 1);
+                    end
+                end else if (slots_n[idx].state == SLOT_READY_OCC_R) begin
+                    issue_valid = 1'b1;
+                    issue_kind = REQ_OCC_R;
+                    issue_slot = idx[SLOT_W-1:0];
+                    issue_addr = occ_addr(slots_n[idx].cur_char, slots_n[idx].r, sigma_m1_n);
+                    slots_n[idx].state = SLOT_WAIT_OCC_R;
+                    rr_ptr_n = (idx == NUM_SLOTS - 1) ? SLOT_W'(0) : SLOT_W'(idx + 1);
+                end else if (slots_n[idx].state == SLOT_READY_C_BASE) begin
+                    issue_valid = 1'b1;
+                    issue_kind = REQ_C_BASE;
+                    issue_slot = idx[SLOT_W-1:0];
+                    issue_addr = c_arr_addr(slots_n[idx].cur_char);
+                    slots_n[idx].state = SLOT_WAIT_C_BASE;
+                    rr_ptr_n = (idx == NUM_SLOTS - 1) ? SLOT_W'(0) : SLOT_W'(idx + 1);
+                end
+            end
+        end
+    end
+
+    // Accept a new query into a free slot once bootstrap has completed.
+    query_ready_n = 1'b0;
+    if (boot_state_n == BOOT_DONE) begin
+        for (int offset = 0; offset < NUM_SLOTS; offset++) begin
+            int idx;
+            idx = wrap_idx(int'(alloc_ptr), offset);
+            if (!query_ready_n && slots[idx].state == SLOT_FREE) begin
+                query_ready_n = 1'b1;
+                if (query_valid) begin
+                    slots_n[idx].query_id = query_id;
+                    slots_n[idx].pattern = query_pattern;
+                    slots_n[idx].pat_len = query_pat_len;
+                    slots_n[idx].pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+                    slots_n[idx].loop_count = query_pat_len;
+                    slots_n[idx].cur_char = '0;
+                    slots_n[idx].l = 32'd0;
+                    slots_n[idx].r = seq_len_n;
+                    slots_n[idx].rank_l = 32'd0;
+                    slots_n[idx].rank_r = 32'd0;
+                    slots_n[idx].c_base = 32'd0;
+                    slots_n[idx].state = SLOT_READ_CHAR;
+                    alloc_ptr_n = (idx == NUM_SLOTS - 1) ? SLOT_W'(0) : SLOT_W'(idx + 1);
+                end
+            end
+        end
+    end
+
+    // Emit at most one completed result per cycle. Results may complete out of
+    // order internally, but the simulator reorders them before printing.
+    for (int offset = 0; offset < NUM_SLOTS; offset++) begin
+        int idx;
+        idx = wrap_idx(int'(emit_ptr), offset);
+        if (!result_valid_n && is_terminal(slots_n[idx].state)) begin
+            result_valid_n = 1'b1;
+            result_done_n = (slots_n[idx].state == SLOT_DONE);
+            result_fail_n = (slots_n[idx].state == SLOT_FAIL);
+            result_query_id_n = slots_n[idx].query_id;
+            result_l_n = slots_n[idx].l;
+            result_r_n = slots_n[idx].r;
+            slots_n[idx].state = SLOT_FREE;
+            emit_ptr_n = (idx == NUM_SLOTS - 1) ? SLOT_W'(0) : SLOT_W'(idx + 1);
+        end
+    end
+
+    // Search requests are only allowed once bootstrap data is available.
+    if (boot_state_n != BOOT_DONE) begin
+        query_ready_n = 1'b0;
+    end
+
+    // Drive the RAM bus from the newly selected request.
+    if (issue_valid) begin
+        ram_req = 1'b1;
+        ram_addr = issue_addr;
+        req_pipe_n[0].valid = 1'b1;
+        req_pipe_n[0].kind = issue_kind;
+        req_pipe_n[0].slot = issue_slot;
+        pending_count_n = pending_count_n + 1'b1;
+    end
 end
+
+assign query_ready = query_ready_n;
+assign result_valid = result_valid_n;
+assign result_done = result_done_n;
+assign result_fail = result_fail_n;
+assign result_query_id = result_query_id_n;
+assign l_out = result_l_n;
+assign r_out = result_r_n;
+assign done = result_valid_n && result_done_n;
+assign fail = result_valid_n && result_fail_n;
 
 always_ff @(posedge clk) begin
     if (reset) begin
-        cur <= '0;
+        boot_state <= BOOT_MAGIC_REQ;
+        seq_len <= 32'd0;
+        sigma_m1 <= 32'd0;
+        alloc_ptr <= '0;
+        rr_ptr <= '0;
+        emit_ptr <= '0;
+        pending_count <= '0;
+        for (int i = 0; i < NUM_SLOTS; i++) begin
+            slots[i].query_id <= 32'd0;
+            slots[i].pattern <= '0;
+            slots[i].pat_len <= '0;
+            slots[i].pat_idx <= '0;
+            slots[i].loop_count <= '0;
+            slots[i].cur_char <= '0;
+            slots[i].l <= '0;
+            slots[i].r <= '0;
+            slots[i].rank_l <= '0;
+            slots[i].rank_r <= '0;
+            slots[i].c_base <= '0;
+            slots[i].state <= SLOT_FREE;
+        end
+        for (int i = 0; i < PIPE_DEPTH; i++) begin
+            req_pipe[i].valid <= 1'b0;
+            req_pipe[i].kind <= REQ_BOOT_MAGIC;
+            req_pipe[i].slot <= '0;
+        end
     end else begin
-        cur <= nxt;
-    end
-end
-
-always_comb begin
-    nxt = cur;
-
-    case (state)
-    INIT: begin
-        nxt = cur;
-        nxt.pipe_kind = PIPE_INIT;
-        nxt.pipe_issue = 2'd1;
-        nxt.pipe_resp = 2'd0;
-        nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
-    end
-
-    IDLE: begin
-        if (start == 1 && cur.boot_done) begin
-            nxt.l = `IDX_WIDTH'd0;
-            nxt.r = cur.seq_len;
-            nxt.loop_count = pat_len_in;
-            nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
-            nxt.rank_l = '0;
-            nxt.rank_r = '0;
-            nxt.c_base = '0;
-            nxt.pipe_kind = PIPE_SEARCH;
-            nxt.pipe_issue = 2'd0;
-            nxt.pipe_resp = 2'd0;
-            nxt.mem_wait = '0;
+        boot_state <= boot_state_n;
+        seq_len <= seq_len_n;
+        sigma_m1 <= sigma_m1_n;
+        alloc_ptr <= alloc_ptr_n;
+        rr_ptr <= rr_ptr_n;
+        emit_ptr <= emit_ptr_n;
+        pending_count <= pending_count_n;
+        for (int i = 0; i < NUM_SLOTS; i++) begin
+            slots[i] <= slots_n[i];
+        end
+        for (int i = 0; i < PIPE_DEPTH; i++) begin
+            req_pipe[i] <= req_pipe_n[i];
         end
     end
-
-    READ_CHAR: begin
-        if (char != 0) begin
-            nxt.loop_count = cur.loop_count - 1'b1;
-            nxt.pipe_kind = PIPE_SEARCH;
-            nxt.pipe_issue = 2'd1;
-            nxt.pipe_resp = 2'd0;
-            nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
-        end
-    end
-
-    MEM_WAIT: begin
-        if (cur.pipe_issue != 2'd3) begin
-            nxt.pipe_issue = cur.pipe_issue + 1'b1;
-        end
-
-        if (cur.mem_wait != 0) begin
-            nxt.mem_wait = cur.mem_wait - 1'b1;
-        end else begin
-            case (cur.pipe_kind)
-            PIPE_INIT: begin
-                case (cur.pipe_resp)
-                2'd0: begin
-                    if (ram_data != INDEX_MAGIC) begin
-                        nxt = cur;
-                    end else begin
-                        nxt.pipe_resp = 2'd1;
-                    end
-                end
-
-                2'd1: begin
-                    nxt.seq_len = ram_data;
-                    nxt.pipe_resp = 2'd2;
-                end
-
-                2'd2: begin
-                    nxt.sigma_m1 = ram_data;
-                    nxt.l = `IDX_WIDTH'd0;
-                    nxt.r = cur.seq_len;
-                    nxt.loop_count = pat_len_in;
-                    nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
-                    nxt.boot_done = 1'b1;
-                    nxt.pipe_issue = 2'd0;
-                    nxt.pipe_resp = 2'd0;
-                end
-
-                default: nxt = cur;
-                endcase
-            end
-
-            PIPE_SEARCH: begin
-                case (cur.pipe_resp)
-                2'd0: begin
-                    nxt.rank_l = ram_data;
-                    nxt.pipe_resp = 2'd1;
-                end
-
-                2'd1: begin
-                    nxt.rank_r = ram_data;
-                    nxt.pipe_resp = 2'd2;
-                end
-
-                2'd2: begin
-                    nxt.c_base = ram_data;
-                    nxt.l = ram_data + cur.rank_l;
-                    nxt.r = ram_data + cur.rank_r;
-                    nxt.pipe_issue = 2'd0;
-                    nxt.pipe_resp = 2'd0;
-                end
-
-                default: nxt = cur;
-                endcase
-            end
-            endcase
-        end
-    end
-
-    CHECK: begin
-        if (!(cur.l >= cur.r) && !(cur.loop_count == 0)) begin
-            nxt.pat_idx = cur.pat_idx - 1'b1;
-        end
-    end
-
-    default: ;
-    endcase
 end
 
 endmodule

@@ -199,3 +199,70 @@ Specifically:
 This is a better baseline, but it is still not fully hiding the RAM latency.
 The next experiment should look at whether we can overlap the end of one burst
 with the start of the next character, or otherwise reduce the `CHECK` bubble.
+
+## Experiment 3: Interleaved multi-query batches
+
+### What changed
+
+This experiment changes the query interface so multiple searches can be in
+flight at once. The simulator now:
+
+- accepts multiple `--pattern` arguments per run
+- tags each query internally so results can be re-ordered before printing
+- emits a `BATCH_CYCLES` total for the full run in benchmark mode
+
+The benchmark itself now sends a batch of 4 queries per case, all with the same
+pattern length, so we can see how well the shared RAM queue stays occupied.
+
+### Results
+
+```tsv
+seq_len	pat_len	queries	cycles
+500	3	4	123
+500	50	4	1458
+500	150	4	4177
+1000	3	4	114
+1000	50	4	1458
+1000	150	4	4309
+50000	3	4	85
+50000	50	4	1354
+50000	150	4	4054
+```
+
+### Observations
+
+#### What changed
+
+The batch numbers are now dominated by how well the controller can keep several
+queries alive at once instead of by a single search burst.
+
+For short patterns, the batch completes much faster than running the same
+queries serially. The benefit is less dramatic for long patterns because the
+per-character dependency chain still dominates.
+
+#### Why `seq_len` still mostly stays out of the picture
+
+The FM-index property still holds:
+
+- the work scales with pattern length, not the full text length
+- the indexed sequence mostly changes the search space size, not the number of
+  pattern-driven memory bursts
+
+That is why the benchmark remains fairly flat across `seq_len`, even with
+multiple queries interleaved.
+
+#### Why `pat_len` still grows roughly linearly
+
+Each query still has to process one pattern symbol at a time. The interleaving
+improves utilization, but it does not change the underlying algorithmic shape.
+
+#### Where are we still wasting cycles?
+
+The controller is better at filling the RAM queue, but there are still gaps:
+
+- the request FIFO is only 4 deep
+- the RAM delay is still longer than the queue depth
+- each query still has an unavoidable dependency chain between pattern symbols
+
+So this experiment improves throughput, but it does not eliminate the memory
+latency bottleneck. The next step would be to deepen the request queue.
