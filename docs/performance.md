@@ -115,3 +115,87 @@ search state machine so we can hide some of that delay.
 The next likely improvement is to pipeline RAM requests where possible and
 measure how much of the per-pattern latency disappears once the controller can
 keep more than one read in flight.
+
+## Experiment 2: Pipelined RAM requests
+
+### What changed
+
+This experiment pipelines the search-side RAM accesses in
+[`fmindex_sv/FM_Index.sv`](/home/aolse/school/ece492/sands/fmindex_sv/FM_Index.sv).
+
+The controller now:
+
+- issues the three search reads for a pattern character back-to-back
+- keeps the requests in flight while the RAM delay counter runs
+- consumes the responses in order once they arrive
+- still preserves the one-time bootstrap after reset
+
+The simulator and benchmark harness were left unchanged except for the cycle
+count reporting already added in Experiment 1.
+
+### Results
+
+```tsv
+seq_len	pat_len	cycles
+500	3	52
+500	50	663
+500	150	1963
+1000	3	52
+1000	50	663
+1000	150	1963
+50000	3	52
+50000	50	663
+50000	150	1963
+```
+
+### Observations
+
+#### What improved
+
+Compared with Experiment 1, the cycle count dropped substantially:
+
+- `3` characters: `116 -> 52`
+- `50` characters: `1479 -> 663`
+- `150` characters: `4379 -> 1963`
+
+That is the expected effect of overlapping the `Occ(char, l)`, `Occ(char, r)`,
+and `C(char)` reads instead of waiting for each one to complete before issuing
+the next.
+
+#### Why `seq_len` still does not matter
+
+The same FM-index property still holds:
+
+- the search walks the pattern
+- the sequence length only changes the index size and the interval values
+- the number of per-character memory bursts is unchanged
+
+So the benchmark still stays flat across `seq_len` for these inputs.
+
+#### Why `pat_len` is still linear
+
+We have reduced the constant factor, but the search is still fundamentally
+character-by-character.
+
+Each character still requires:
+
+- one burst for the three RAM reads
+- one control step to fold the responses into the next interval
+
+So the total cycle count remains approximately linear in `pat_len`.
+
+#### Where are we still wasting cycles?
+
+The main remaining waste is the tail latency of each burst and the control
+bubble around `CHECK` / `READ_CHAR`.
+
+Specifically:
+
+- the first response of each burst still has to wait for the RAM delay
+- the controller still serializes a pattern character into a single burst
+- we do not overlap one character's interval update with the next character's
+  request setup yet
+
+This is a better baseline, but it is still not fully hiding the RAM latency.
+The next experiment should look at whether we can overlap the end of one burst
+with the start of the next character, or otherwise reduce the `CHECK` bubble.

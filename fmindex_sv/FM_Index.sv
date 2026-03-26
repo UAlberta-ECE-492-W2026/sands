@@ -41,14 +41,10 @@ typedef enum logic [2:0] {
     FAIL_S
 } state_t;
 
-typedef enum logic [2:0] {
-    OP_INIT_MAGIC,
-    OP_INIT_LEN,
-    OP_INIT_ALPHA,
-    OP_RANK_L,
-    OP_RANK_R,
-    OP_UPDATE
-} mem_op_t;
+typedef enum logic {
+    PIPE_INIT,
+    PIPE_SEARCH
+} pipe_kind_t;
 
 typedef struct packed {
     logic [31:0] magic;
@@ -58,10 +54,13 @@ typedef struct packed {
     logic [`IDX_WIDTH-1:0] r;
     logic [`IDX_WIDTH-1:0] rank_l;
     logic [`IDX_WIDTH-1:0] rank_r;
+    logic [`IDX_WIDTH-1:0] c_base;
     logic [PAT_IDX_W-1:0] pat_idx;
     logic [LOOP_COUNT_W-1:0] loop_count;
     logic boot_done;
-    mem_op_t mem_op;
+    pipe_kind_t pipe_kind;
+    logic [1:0] pipe_issue;
+    logic [1:0] pipe_resp;
     logic [RAM_WAIT_W-1:0] mem_wait;
 } search_t;
 
@@ -97,7 +96,7 @@ always_ff @(negedge clk) begin
     case (state)
     INIT: $display("INIT");
     READ_CHAR: $display("READ_CHAR c=%d", char);
-    MEM_WAIT: $display("MEM_WAIT wait=%0d op=%0d", cur.mem_wait, cur.mem_op);
+    MEM_WAIT: $display("MEM_WAIT wait=%0d kind=%0d issue=%0d resp=%0d", cur.mem_wait, cur.pipe_kind, cur.pipe_issue, cur.pipe_resp);
     CHECK: $display("CHECK");
     DONE_S: $display("DONE_S");
     FAIL_S: $display("FAIL_S");
@@ -145,19 +144,30 @@ always_comb begin
         if (cur.mem_wait != 0) begin
             next_state = MEM_WAIT;
         end else begin
-            case (cur.mem_op)
-            OP_INIT_MAGIC: begin
-                if (ram_data != INDEX_MAGIC)
-                    next_state = FAIL_S;
-                else
-                    next_state = MEM_WAIT;
+            case (cur.pipe_kind)
+            PIPE_INIT: begin
+                case (cur.pipe_resp)
+                2'd0: begin
+                    if (ram_data != INDEX_MAGIC)
+                        next_state = FAIL_S;
+                    else
+                        next_state = MEM_WAIT;
+                end
+                2'd1: next_state = MEM_WAIT;
+                2'd2: next_state = READ_CHAR;
+                default: next_state = IDLE;
+                endcase
             end
 
-            OP_INIT_LEN: next_state = MEM_WAIT;
-            OP_INIT_ALPHA: next_state = READ_CHAR;
-            OP_RANK_L: next_state = MEM_WAIT;
-            OP_RANK_R: next_state = MEM_WAIT;
-            OP_UPDATE: next_state = CHECK;
+            PIPE_SEARCH: begin
+                case (cur.pipe_resp)
+                2'd0: next_state = MEM_WAIT;
+                2'd1: next_state = MEM_WAIT;
+                2'd2: next_state = CHECK;
+                default: next_state = IDLE;
+                endcase
+            end
+
             default: next_state = IDLE;
             endcase
         end
@@ -187,6 +197,7 @@ assign done = state == DONE_S;
 assign fail = state == FAIL_S;
 always_comb begin
     ram_req = 1'b0;
+    ram_addr = 32'd0;
     case (state)
     INIT: begin
         ram_req = 1'b1;
@@ -201,39 +212,42 @@ always_comb begin
     end
 
     MEM_WAIT: begin
-        if (cur.mem_wait == 0) begin
-            case (cur.mem_op)
-            OP_INIT_MAGIC: begin
-                if (ram_data != INDEX_MAGIC) begin
-                    ram_req = 1'b0;
-                    ram_addr = 32'd0;
-                end else begin
-                    ram_req = 1'b1;
-                    ram_addr = 32'd1;
-                end
+        case (cur.pipe_kind)
+        PIPE_INIT: begin
+            case (cur.pipe_issue)
+            2'd1: begin
+                ram_req = 1'b1;
+                ram_addr = 32'd1;
             end
-
-            OP_INIT_LEN: begin
+            2'd2: begin
                 ram_req = 1'b1;
                 ram_addr = 32'd2;
             end
-
-            OP_RANK_L: begin
-                ram_req = 1'b1;
-                ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
-            end
-
-            OP_RANK_R: begin
-                ram_req = 1'b1;
-                ram_addr = c_arr_addr(char);
-            end
-
             default: begin
                 ram_req = 1'b0;
                 ram_addr = 32'd0;
             end
             endcase
         end
+
+        PIPE_SEARCH: begin
+            case (cur.pipe_issue)
+            2'd1: begin
+                ram_req = 1'b1;
+                ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
+            end
+            2'd2: begin
+                ram_req = 1'b1;
+                ram_addr = c_arr_addr(char);
+            end
+            default: begin
+                ram_req = 1'b0;
+                ram_addr = 32'd0;
+            end
+            endcase
+        end
+
+        endcase
     end
 
     default: ram_addr = 0;
@@ -254,7 +268,9 @@ always_comb begin
     case (state)
     INIT: begin
         nxt = cur;
-        nxt.mem_op = OP_INIT_MAGIC;
+        nxt.pipe_kind = PIPE_INIT;
+        nxt.pipe_issue = 2'd1;
+        nxt.pipe_resp = 2'd0;
         nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
     end
 
@@ -266,7 +282,10 @@ always_comb begin
             nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
             nxt.rank_l = '0;
             nxt.rank_r = '0;
-            nxt.mem_op = OP_RANK_L;
+            nxt.c_base = '0;
+            nxt.pipe_kind = PIPE_SEARCH;
+            nxt.pipe_issue = 2'd0;
+            nxt.pipe_resp = 2'd0;
             nxt.mem_wait = '0;
         end
     end
@@ -274,60 +293,75 @@ always_comb begin
     READ_CHAR: begin
         if (char != 0) begin
             nxt.loop_count = cur.loop_count - 1'b1;
-            nxt.mem_op = OP_RANK_L;
+            nxt.pipe_kind = PIPE_SEARCH;
+            nxt.pipe_issue = 2'd1;
+            nxt.pipe_resp = 2'd0;
             nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
         end
     end
 
     MEM_WAIT: begin
+        if (cur.pipe_issue != 2'd3) begin
+            nxt.pipe_issue = cur.pipe_issue + 1'b1;
+        end
+
         if (cur.mem_wait != 0) begin
             nxt.mem_wait = cur.mem_wait - 1'b1;
         end else begin
-            case (cur.mem_op)
-            OP_INIT_MAGIC: begin
-                if (ram_data != INDEX_MAGIC) begin
-                    nxt = cur;
-                end else begin
-                    nxt.mem_op = OP_INIT_LEN;
-                    nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+            case (cur.pipe_kind)
+            PIPE_INIT: begin
+                case (cur.pipe_resp)
+                2'd0: begin
+                    if (ram_data != INDEX_MAGIC) begin
+                        nxt = cur;
+                    end else begin
+                        nxt.pipe_resp = 2'd1;
+                    end
                 end
+
+                2'd1: begin
+                    nxt.seq_len = ram_data;
+                    nxt.pipe_resp = 2'd2;
+                end
+
+                2'd2: begin
+                    nxt.sigma_m1 = ram_data;
+                    nxt.l = `IDX_WIDTH'd0;
+                    nxt.r = cur.seq_len;
+                    nxt.loop_count = pat_len_in;
+                    nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+                    nxt.boot_done = 1'b1;
+                    nxt.pipe_issue = 2'd0;
+                    nxt.pipe_resp = 2'd0;
+                end
+
+                default: nxt = cur;
+                endcase
             end
 
-            OP_INIT_LEN: begin
-                nxt.seq_len = ram_data;
-                nxt.mem_op = OP_INIT_ALPHA;
-                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
-            end
+            PIPE_SEARCH: begin
+                case (cur.pipe_resp)
+                2'd0: begin
+                    nxt.rank_l = ram_data;
+                    nxt.pipe_resp = 2'd1;
+                end
 
-            OP_INIT_ALPHA: begin
-                nxt.sigma_m1 = ram_data;
-                nxt.l = `IDX_WIDTH'd0;
-                nxt.r = cur.seq_len;
-                nxt.loop_count = pat_len_in;
-                nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
-                nxt.boot_done = 1'b1;
-                nxt.mem_op = OP_INIT_MAGIC;
-            end
+                2'd1: begin
+                    nxt.rank_r = ram_data;
+                    nxt.pipe_resp = 2'd2;
+                end
 
-            OP_RANK_L: begin
-                nxt.rank_l = ram_data; // Occ[char][l];
-                nxt.mem_op = OP_RANK_R;
-                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
-            end
+                2'd2: begin
+                    nxt.c_base = ram_data;
+                    nxt.l = ram_data + cur.rank_l;
+                    nxt.r = ram_data + cur.rank_r;
+                    nxt.pipe_issue = 2'd0;
+                    nxt.pipe_resp = 2'd0;
+                end
 
-            OP_RANK_R: begin
-                nxt.rank_r = ram_data; // Occ[char][r];
-                nxt.mem_op = OP_UPDATE;
-                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+                default: nxt = cur;
+                endcase
             end
-
-            OP_UPDATE: begin
-                nxt.l = ram_data + cur.rank_l; // C_arr[char] + rank_l;
-                nxt.r = ram_data + cur.rank_r; // C_arr[char] + rank_r;
-                nxt.mem_op = OP_INIT_MAGIC;
-            end
-
-            default: nxt = cur;
             endcase
         end
     end
