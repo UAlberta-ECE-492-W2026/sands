@@ -1,17 +1,18 @@
 `define CHAR_WIDTH 3
-`define PAT_LEN 8 
 `define IDX_WIDTH 32
 `define SIGMA 5
 `define N 15
 
-module top(
+module top #(
+    parameter int PAT_MAX_LEN = 150
+) (
     input logic clk,
 
     input logic reset,
     input logic start,
 
-    input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
-    input logic [$clog2(`PAT_LEN+1)-1:0] pat_len_in,
+    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
+    input logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len_in,
 
     output logic [`IDX_WIDTH-1:0] l_out,
     output logic [`IDX_WIDTH-1:0] r_out,
@@ -23,7 +24,9 @@ module top(
 logic [31:0] addr;
 logic [`IDX_WIDTH-1:0] data;
 
-FM_Index dut (
+FM_Index #(
+    .PAT_MAX_LEN(PAT_MAX_LEN)
+) dut (
     .clk(clk),
     .reset(reset),
     .start(start),

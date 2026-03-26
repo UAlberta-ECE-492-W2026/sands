@@ -9,14 +9,21 @@
 #include <cstdio>
 #include <string>
 #include <fstream>
+#include <cstring>
 
 #define SIM_LENGTH 10000000 // edit this value to change siumulation length
+#ifndef PAT_MAX_LEN
+#define PAT_MAX_LEN 150
+#endif
+
+static constexpr int CHAR_WIDTH = 3;
+static constexpr int PAT_WORDS = (PAT_MAX_LEN * CHAR_WIDTH + 31) / 32;
 
 vluint64_t main_time = 0;
 
 struct Cmd {
-    int pat_len;
-    int pattern;
+    uint32_t pat_len;
+    uint32_t pattern[PAT_WORDS];
 };
 
 // Required for Verilator when using --timing (do not delete)
@@ -73,8 +80,8 @@ int main(int argc, char **argv) {
 
         // STEP 4.2: if data sent from pipe, add data to memory and start algorithm
         if (r == sizeof(cmd)) {
-            printf("Received: pattern=%d length=%d\n", cmd.pattern, cmd.pat_len);
-            top->pattern = cmd.pattern;
+            printf("Received: length=%u\n", cmd.pat_len);
+            std::memcpy(top->pattern.data(), cmd.pattern, sizeof(cmd.pattern));
             top->pat_len_in = cmd.pat_len;
             top->start = 1;
             top->reset = 0;

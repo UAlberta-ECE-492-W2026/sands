@@ -1,17 +1,18 @@
 `define CHAR_WIDTH 3
-`define PAT_LEN 8 
 `define IDX_WIDTH 32
 `define HEADER_WORDS 3
 
 localparam logic [31:0] INDEX_MAGIC = 32'h3144_4946; // "FID1" in little-endian bytes
 
-module FM_Index (
+module FM_Index #(
+    parameter int PAT_MAX_LEN = 150
+) (
     input logic clk,
     input logic reset,
     input logic start,
 
-    input logic [`CHAR_WIDTH*`PAT_LEN-1:0] pattern,
-    input logic [$clog2(`PAT_LEN+1)-1:0] pat_len_in,
+    input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
+    input logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len_in,
 
     input logic [`IDX_WIDTH-1:0] ram_data,
     output logic [31:0] ram_addr,
@@ -23,8 +24,8 @@ module FM_Index (
     output logic [`IDX_WIDTH-1:0] r_out
 );
 
-localparam int PAT_IDX_W = $clog2(`PAT_LEN);
-localparam int LOOP_COUNT_W = $clog2(`PAT_LEN + 1);
+localparam int PAT_IDX_W = $clog2(PAT_MAX_LEN);
+localparam int LOOP_COUNT_W = $clog2(PAT_MAX_LEN + 1);
 
 typedef enum logic [3:0] {
     IDLE,
@@ -218,7 +219,7 @@ always_comb begin
         nxt.l = `IDX_WIDTH'd0;
         nxt.r = cur.seq_len;
         nxt.loop_count = pat_len_in;
-        nxt.pat_idx = PAT_IDX_W'(`PAT_LEN - 1);
+        nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
     end
 
     READ_CHAR: begin
