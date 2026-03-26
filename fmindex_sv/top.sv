@@ -4,7 +4,9 @@
 `define N 15
 
 module top #(
-    parameter int PAT_MAX_LEN = 150
+    parameter int PAT_MAX_LEN = 150,
+    parameter int RAM_FIFO_DEPTH = 4,
+    parameter int RAM_DELAY_CYCLES = 8
 ) (
     input logic clk,
 
@@ -23,15 +25,18 @@ module top #(
 
 logic [31:0] addr;
 logic [`IDX_WIDTH-1:0] data;
+logic ram_req;
 
 FM_Index #(
-    .PAT_MAX_LEN(PAT_MAX_LEN)
+    .PAT_MAX_LEN(PAT_MAX_LEN),
+    .RAM_DELAY_CYCLES(RAM_DELAY_CYCLES)
 ) dut (
     .clk(clk),
     .reset(reset),
     .start(start),
     .pattern(pattern),
     .pat_len_in(pat_len_in),
+    .ram_req(ram_req),
     .ram_addr(addr),
     .ram_data(data),
     .done(done),
@@ -40,8 +45,12 @@ FM_Index #(
     .r_out(r_out)
 );
 
-ram dram (
+ram #(
+    .RAM_FIFO_DEPTH(RAM_FIFO_DEPTH),
+    .RAM_DELAY_CYCLES(RAM_DELAY_CYCLES)
+) dram (
     .clk(clk),
+    .request(ram_req),
     .address(addr),
     .data(data)
 );

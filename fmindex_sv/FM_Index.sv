@@ -5,7 +5,8 @@
 localparam logic [31:0] INDEX_MAGIC = 32'h3144_4946; // "FID1" in little-endian bytes
 
 module FM_Index #(
-    parameter int PAT_MAX_LEN = 150
+    parameter int PAT_MAX_LEN = 150,
+    parameter int RAM_DELAY_CYCLES = 8
 ) (
     input logic clk,
     input logic reset,
@@ -14,6 +15,7 @@ module FM_Index #(
     input logic [`CHAR_WIDTH*PAT_MAX_LEN-1:0] pattern,
     input logic [$clog2(PAT_MAX_LEN+1)-1:0] pat_len_in,
 
+    output logic ram_req,
     input logic [`IDX_WIDTH-1:0] ram_data,
     output logic [31:0] ram_addr,
 
@@ -26,24 +28,27 @@ module FM_Index #(
 
 localparam int PAT_IDX_W = $clog2(PAT_MAX_LEN);
 localparam int LOOP_COUNT_W = $clog2(PAT_MAX_LEN + 1);
+localparam int RAM_WAIT_CYCLES = (RAM_DELAY_CYCLES < 1) ? 1 : RAM_DELAY_CYCLES;
+localparam int RAM_WAIT_W = $clog2(RAM_WAIT_CYCLES + 1);
 
-typedef enum logic [3:0] {
+typedef enum logic [2:0] {
     IDLE,
     INIT,
-    INIT_LOAD_MAGIC,
-    INIT_LOAD_LEN,
-    INIT_LOAD_ALPHA,
     READ_CHAR,
-    RANK_L_S,
-    RANK_L_S_LOAD,
-    RANK_R_S,
-    RANK_R_S_LOAD,
-    UPDATE,
-    UPDATE_LOAD,
+    MEM_WAIT,
     CHECK,
     DONE_S,
     FAIL_S
 } state_t;
+
+typedef enum logic [2:0] {
+    OP_INIT_MAGIC,
+    OP_INIT_LEN,
+    OP_INIT_ALPHA,
+    OP_RANK_L,
+    OP_RANK_R,
+    OP_UPDATE
+} mem_op_t;
 
 typedef struct packed {
     logic [31:0] magic;
@@ -55,6 +60,8 @@ typedef struct packed {
     logic [`IDX_WIDTH-1:0] rank_r;
     logic [PAT_IDX_W-1:0] pat_idx;
     logic [LOOP_COUNT_W-1:0] loop_count;
+    mem_op_t mem_op;
+    logic [RAM_WAIT_W-1:0] mem_wait;
 } search_t;
 
 function automatic logic [31:0] occ_addr(
@@ -88,16 +95,8 @@ search_t cur, nxt;
 always_ff @(negedge clk) begin
     case (state)
     INIT: $display("INIT");
-    INIT_LOAD_MAGIC: $display("INIT_LOAD_MAGIC");
-    INIT_LOAD_LEN: $display("INIT_LOAD_LEN");
-    INIT_LOAD_ALPHA: $display("INIT_LOAD_ALPHA");
     READ_CHAR: $display("READ_CHAR c=%d", char);
-    RANK_L_S: $display("RANK_L_S");
-    RANK_L_S_LOAD: $display("RANK_L_S_LOAD");
-    RANK_R_S: $display("RANK_R_S");
-    RANK_R_S_LOAD: $display("RANK_R_S_LOAD");
-    UPDATE: $display("UPDATE");
-    UPDATE_LOAD: $display("UPDATE_LOAD");
+    MEM_WAIT: $display("MEM_WAIT wait=%0d op=%0d", cur.mem_wait, cur.mem_op);
     CHECK: $display("CHECK");
     DONE_S: $display("DONE_S");
     FAIL_S: $display("FAIL_S");
@@ -124,33 +123,42 @@ always_comb begin
             next_state = IDLE;
     end
 
-    INIT: next_state = INIT_LOAD_MAGIC;
-
-    INIT_LOAD_MAGIC: begin
-        if (ram_data != INDEX_MAGIC)
-            next_state = FAIL_S;
-        else
-            next_state = INIT_LOAD_LEN;
-    end
-
-    INIT_LOAD_LEN: next_state = INIT_LOAD_ALPHA;
-
-    INIT_LOAD_ALPHA: next_state = READ_CHAR;
+    INIT: next_state = MEM_WAIT;
 
     READ_CHAR: begin
-        if (char == 0)
-            // Skip '$' chars (should be end of input)
-            next_state = CHECK;
-        else
-            next_state = RANK_L_S;
+        if (char == 0) begin
+            if (cur.loop_count == 0)
+                // End of input: the remaining padding is all zeros.
+                next_state = CHECK;
+            else
+                // Unexpected zero before the pattern is fully consumed.
+                next_state = FAIL_S;
+        end else begin
+            next_state = MEM_WAIT;
+        end
     end
 
-    RANK_L_S: next_state = RANK_L_S_LOAD;
-    RANK_L_S_LOAD: next_state = RANK_R_S;
-    RANK_R_S: next_state = RANK_R_S_LOAD;
-    RANK_R_S_LOAD: next_state = UPDATE;
-    UPDATE: next_state = UPDATE_LOAD;
-    UPDATE_LOAD: next_state = CHECK;
+    MEM_WAIT: begin
+        if (cur.mem_wait != 0) begin
+            next_state = MEM_WAIT;
+        end else begin
+            case (cur.mem_op)
+            OP_INIT_MAGIC: begin
+                if (ram_data != INDEX_MAGIC)
+                    next_state = FAIL_S;
+                else
+                    next_state = MEM_WAIT;
+            end
+
+            OP_INIT_LEN: next_state = MEM_WAIT;
+            OP_INIT_ALPHA: next_state = READ_CHAR;
+            OP_RANK_L: next_state = MEM_WAIT;
+            OP_RANK_R: next_state = MEM_WAIT;
+            OP_UPDATE: next_state = CHECK;
+            default: next_state = IDLE;
+            endcase
+        end
+    end
 
     CHECK: begin
         if (cur.l >= cur.r) begin
@@ -175,14 +183,56 @@ assign r_out = cur.r;
 assign done = state == DONE_S;
 assign fail = state == FAIL_S;
 always_comb begin
+    ram_req = 1'b0;
     case (state)
-    INIT: ram_addr = 32'd0;
-    INIT_LOAD_MAGIC: ram_addr = 32'd1;
-    INIT_LOAD_LEN: ram_addr = 32'd2;
-    INIT_LOAD_ALPHA: ram_addr = 32'd0;
-    RANK_L_S: ram_addr = occ_addr(char, cur.l, cur.sigma_m1);
-    RANK_R_S: ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
-    UPDATE: ram_addr = c_arr_addr(char);
+    INIT: begin
+        ram_req = 1'b1;
+        ram_addr = 32'd0;
+    end
+
+    READ_CHAR: begin
+        if (char != 0) begin
+            ram_req = 1'b1;
+            ram_addr = occ_addr(char, cur.l, cur.sigma_m1);
+        end
+    end
+
+    MEM_WAIT: begin
+        if (cur.mem_wait == 0) begin
+            case (cur.mem_op)
+            OP_INIT_MAGIC: begin
+                if (ram_data != INDEX_MAGIC) begin
+                    ram_req = 1'b0;
+                    ram_addr = 32'd0;
+                end else begin
+                    ram_req = 1'b1;
+                    ram_addr = 32'd1;
+                end
+            end
+
+            OP_INIT_LEN: begin
+                ram_req = 1'b1;
+                ram_addr = 32'd2;
+            end
+
+            OP_RANK_L: begin
+                ram_req = 1'b1;
+                ram_addr = occ_addr(char, cur.r, cur.sigma_m1);
+            end
+
+            OP_RANK_R: begin
+                ram_req = 1'b1;
+                ram_addr = c_arr_addr(char);
+            end
+
+            default: begin
+                ram_req = 1'b0;
+                ram_addr = 32'd0;
+            end
+            endcase
+        end
+    end
+
     default: ram_addr = 0;
     endcase
 end
@@ -201,42 +251,68 @@ always_comb begin
     case (state)
     INIT: begin
         nxt = cur;
-    end
-
-    INIT_LOAD_MAGIC: begin
-        nxt = cur;
-        nxt.magic = ram_data;
-    end
-
-    INIT_LOAD_LEN: begin
-        nxt = cur;
-        nxt.seq_len = ram_data;
-    end
-
-    INIT_LOAD_ALPHA: begin
-        nxt = cur;
-        nxt.sigma_m1 = ram_data;
-        nxt.l = `IDX_WIDTH'd0;
-        nxt.r = cur.seq_len;
-        nxt.loop_count = pat_len_in;
-        nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+        nxt.mem_op = OP_INIT_MAGIC;
+        nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
     end
 
     READ_CHAR: begin
-        nxt.loop_count = cur.loop_count - 1'b1;
+        if (char != 0) begin
+            nxt.loop_count = cur.loop_count - 1'b1;
+            nxt.mem_op = OP_RANK_L;
+            nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+        end
     end
 
-    RANK_L_S_LOAD: begin
-        nxt.rank_l = ram_data; // Occ[char][l];
-    end
+    MEM_WAIT: begin
+        if (cur.mem_wait != 0) begin
+            nxt.mem_wait = cur.mem_wait - 1'b1;
+        end else begin
+            case (cur.mem_op)
+            OP_INIT_MAGIC: begin
+                if (ram_data != INDEX_MAGIC) begin
+                    nxt = cur;
+                end else begin
+                    nxt.mem_op = OP_INIT_LEN;
+                    nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+                end
+            end
 
-    RANK_R_S_LOAD: begin
-        nxt.rank_r = ram_data; // Occ[char][r];
-    end
+            OP_INIT_LEN: begin
+                nxt.seq_len = ram_data;
+                nxt.mem_op = OP_INIT_ALPHA;
+                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+            end
 
-    UPDATE_LOAD: begin
-        nxt.l = ram_data + cur.rank_l; // C_arr[char] + rank_l;
-        nxt.r = ram_data + cur.rank_r; // C_arr[char] + rank_r;
+            OP_INIT_ALPHA: begin
+                nxt.sigma_m1 = ram_data;
+                nxt.l = `IDX_WIDTH'd0;
+                nxt.r = cur.seq_len;
+                nxt.loop_count = pat_len_in;
+                nxt.pat_idx = PAT_IDX_W'(PAT_MAX_LEN - 1);
+                nxt.mem_op = OP_INIT_MAGIC;
+            end
+
+            OP_RANK_L: begin
+                nxt.rank_l = ram_data; // Occ[char][l];
+                nxt.mem_op = OP_RANK_R;
+                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+            end
+
+            OP_RANK_R: begin
+                nxt.rank_r = ram_data; // Occ[char][r];
+                nxt.mem_op = OP_UPDATE;
+                nxt.mem_wait = RAM_WAIT_W'(RAM_WAIT_CYCLES);
+            end
+
+            OP_UPDATE: begin
+                nxt.l = ram_data + cur.rank_l; // C_arr[char] + rank_l;
+                nxt.r = ram_data + cur.rank_r; // C_arr[char] + rank_r;
+                nxt.mem_op = OP_INIT_MAGIC;
+            end
+
+            default: nxt = cur;
+            endcase
+        end
     end
 
     CHECK: begin

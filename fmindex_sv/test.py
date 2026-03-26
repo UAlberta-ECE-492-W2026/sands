@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from dataclasses import dataclass
 
 
 CASES = 200
@@ -16,7 +17,21 @@ PAT_MAX_LEN = 150
 SEED = 0x6B6D6B6D5F737663
 
 
-def run(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+@dataclass(frozen=True)
+class CaseSpec:
+    name: str
+    sequence: str
+    query: str | None = None
+    compare_rust: bool = False
+
+
+def run(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
@@ -28,7 +43,7 @@ def run(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subp
         text=True,
         capture_output=True,
     )
-    if proc.returncode != 0:
+    if check and proc.returncode != 0:
         raise RuntimeError(
             f"command failed: {' '.join(cmd)}\n"
             f"cwd: {cwd}\n"
@@ -77,6 +92,17 @@ def parse_rust_search(stdout: str, stderr: str) -> tuple[int, int] | None:
     raise ValueError(f"could not parse fmindexer output:\nstdout:\n{stdout}\nstderr:\n{stderr}")
 
 
+def run_rust_search(bin_path: Path, index_path: Path, query: str, cwd: Path) -> tuple[int, int] | None:
+    proc = run(
+        [str(bin_path), "search", str(index_path), query, "--no-list-all-outputs"],
+        cwd=cwd,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return parse_rust_search(proc.stdout, proc.stderr)
+
+
 def parse_sv_search(output: str) -> tuple[int, int] | None:
     for line in output.splitlines():
         line = line.strip()
@@ -97,10 +123,14 @@ def build_index(bin_path: Path, seq_path: Path, out_path: Path, subcommand: str)
     )
 
 
-def run_sv(repo_root: Path, index_path: Path, pattern: str, rebuild: bool) -> tuple[int, int] | None:
+def run_sv(
+    repo_root: Path,
+    index_path: Path,
+    pattern: str | None,
+    rebuild: bool,
+) -> tuple[int, int] | None:
     env = {
         "INDEX_BIN": str(index_path),
-        "FMINDEX_PATTERN": pattern,
         "FMINDEX_REPEAT": "1",
         "FMINDEX_SLEEP_SECS": "0",
         "PAT_MAX_LEN": str(PAT_MAX_LEN),
@@ -108,8 +138,12 @@ def run_sv(repo_root: Path, index_path: Path, pattern: str, rebuild: bool) -> tu
     if rebuild:
         env["SV_REBUILD"] = "1"
 
+    args = ["./run.sh"]
+    if pattern is not None:
+        args.extend(["--pattern", pattern])
+
     proc = subprocess.run(
-        ["./run.sh"],
+        args,
         cwd=repo_root / "fmindex_sv",
         env={**os.environ, **env},
         text=True,
@@ -122,6 +156,107 @@ def run_sv(repo_root: Path, index_path: Path, pattern: str, rebuild: bool) -> tu
     return parse_sv_search(proc.stdout)
 
 
+def run_case(
+    repo_root: Path,
+    fmindexer_bin: Path,
+    tmpdir: Path,
+    case: CaseSpec,
+    *,
+    rebuild: bool,
+) -> None:
+    case_dir = tmpdir / case.name
+    case_dir.mkdir()
+    seq_path = case_dir / "seq.txt"
+    sv_index_path = case_dir / "sv.fmi"
+    seq_path.write_text(case.sequence)
+
+    build_index(fmindexer_bin, seq_path, sv_index_path, "build-sim")
+
+    rust_result: tuple[int, int] | None = None
+    if case.compare_rust:
+        rust_index_path = case_dir / "rust.fmi"
+        build_index(fmindexer_bin, seq_path, rust_index_path, "build")
+        rust_result = run_rust_search(
+            fmindexer_bin,
+            rust_index_path,
+            case.query or "",
+            repo_root / "fmindexer.rs",
+        )
+
+    sv_result = run_sv(
+        repo_root,
+        sv_index_path,
+        case.query,
+        rebuild=rebuild,
+    )
+
+    if case.compare_rust:
+        assert case.query is not None
+        if rust_result != sv_result:
+            raise AssertionError(
+                f"case {case.name} diverged\n"
+                f"sequence: {case.sequence}\n"
+                f"query: {case.query}\n"
+                f"rust: {rust_result}\n"
+                f"sv: {sv_result}\n"
+            )
+    else:
+        raise AssertionError(f"case {case.name} has no assertion mode")
+
+
+def make_compatibility_cases(rng: random.Random) -> list[CaseSpec]:
+    cases: list[CaseSpec] = []
+    for case_idx in range(CASES):
+        seq_len = rng.randint(4, 48)
+        query_len = rng.randint(1, 10)
+        cases.append(
+            CaseSpec(
+                name=f"compat-{case_idx}",
+                sequence=rand_sequence(rng, seq_len),
+                query=rand_query(rng, query_len),
+                compare_rust=True,
+            )
+        )
+    return cases
+
+
+def make_empty_sequence_cases() -> list[CaseSpec]:
+    seq = ""
+    return [
+        CaseSpec(name="empty-seq-a", sequence=seq, query="A", compare_rust=True),
+        CaseSpec(name="empty-seq-ac", sequence=seq, query="AC", compare_rust=True),
+    ]
+
+
+def make_empty_pattern_cases() -> list[CaseSpec]:
+    return [
+        CaseSpec(name="empty-pattern", sequence="ACGT", query="", compare_rust=True),
+        CaseSpec(name="empty-pattern-empty-seq", sequence="", query="", compare_rust=True),
+    ]
+
+
+def run_suite(
+    name: str,
+    cases: list[CaseSpec],
+    repo_root: Path,
+    fmindexer_bin: Path,
+    tmpdir: Path,
+    *,
+    rebuild_first_case: bool = False,
+) -> None:
+    print(f"{name}: ", end="", flush=True)
+    for idx, case in enumerate(cases):
+        run_case(
+            repo_root,
+            fmindexer_bin,
+            tmpdir,
+            case,
+            rebuild=rebuild_first_case and idx == 0,
+        )
+        print('.', end='', flush=True)
+    print()
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test.py <repo-root>")
@@ -132,42 +267,32 @@ def main() -> int:
     rng = random.Random(SEED)
     with tempfile.TemporaryDirectory(prefix="fmindex-sv-compat-") as tmp:
         tmpdir = Path(tmp)
-        for case_idx in range(CASES):
-            print('.', end='', flush=True)
-            seq_len = rng.randint(4, 48)
-            query_len = rng.randint(1, 10)
-            seq = rand_sequence(rng, seq_len)
-            query = rand_query(rng, query_len)
+        compatibility_cases = make_compatibility_cases(rng)
+        run_suite(
+            "compatibility",
+            compatibility_cases,
+            repo_root,
+            fmindexer_bin,
+            tmpdir,
+            rebuild_first_case=True,
+        )
+        run_suite(
+            "empty-sequence",
+            make_empty_sequence_cases(),
+            repo_root,
+            fmindexer_bin,
+            tmpdir,
+        )
+        run_suite(
+            "empty-pattern",
+            make_empty_pattern_cases(),
+            repo_root,
+            fmindexer_bin,
+            tmpdir,
+            rebuild_first_case=False,
+        )
 
-            case_dir = tmpdir / f"case-{case_idx}"
-            case_dir.mkdir()
-            seq_path = case_dir / "seq.txt"
-            rust_index_path = case_dir / "rust.fmi"
-            sv_index_path = case_dir / "sv.fmi"
-
-            seq_path.write_text(seq)
-            build_index(fmindexer_bin, seq_path, rust_index_path, "build")
-            build_index(fmindexer_bin, seq_path, sv_index_path, "build-sim")
-
-            rust_output = run(
-                [str(fmindexer_bin), "search", str(rust_index_path), query, "--no-list-all-outputs"],
-                cwd=repo_root / "fmindexer.rs",
-            )
-            rust_result = parse_rust_search(rust_output.stdout, rust_output.stderr)
-            sv_result = run_sv(repo_root, sv_index_path, query, rebuild=(case_idx == 0))
-
-            if rust_result != sv_result:
-                print()
-                raise AssertionError(
-                    f"case {case_idx} diverged\n"
-                    f"sequence: {seq}\n"
-                    f"query: {query}\n"
-                    f"rust: {rust_result}\n"
-                    f"sv: {sv_result}\n"
-                    f"rust stdout:\n{rust_output.stdout}"
-                )
-
-    print(f"\nsv compatibility tests PASS ({CASES} cases)")
+    print(f"PASS: compatibility={CASES}, empty-sequence=2, empty-pattern=2")
     return 0
 
 
