@@ -27,4 +27,8 @@ $ ./x.sh tests       # Run all tests
 $ ./x.sh check       # Typecheck all code
 $ ./x.sh run-local   # Run locally (with docker-compose)
 $ ./x.sh help        # Print this message
+
+# Hardware Simulation
+$ ./x.sh index-seq 1000 index.bin  # Generate a sequence and build an SV index
+$ ./x.sh sim index.bin             # Run the SystemVerilog FM-index simulation (requires verliator)
 ```

@@ -2,6 +2,19 @@
 
 export PYTHONPATH=$PWD
 
+_abspath() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$PWD" "$1" ;;
+  esac
+}
+
+_header() {
+  echo
+  echo "====== $1 ===================================="
+  echo
+}
+
 help() {
   usage
 }
@@ -14,15 +27,11 @@ Usage:  $0 setup-venv  Setup your local venv
         $0 tests       Run all tests
         $0 check       Typecheck all code
         $0 run-local   Run locally (with docker-compose)
+        $0 index-seq   Generate a sequence and build an SV index
+        $0 sim         Run the SystemVerilog FM-index simulation
         $0 help        Print this message
 
 EOF
-}
-
-header() {
-  echo
-  echo "====== $1 ===================================="
-  echo
 }
 
 activate-venv() {
@@ -54,10 +63,10 @@ setup-venv() {
 tests() {
   activate-venv
 
-  header 'Running pytest tests'
+  _header 'Running pytest tests'
   pytest
 
-  header 'Running fmindexer tests'
+  _header 'Running fmindexer tests'
   pushd fmindexer.rs >/dev/null
   test/run.sh
   popd
@@ -66,22 +75,22 @@ tests() {
 check() {
   activate-venv
 
-  header 'Type checking orca'
+  _header 'Type checking orca'
   pushd orca >/dev/null
   ty check
   popd >/dev/null
 
-  header 'Type checking buoy'
+  _header 'Type checking buoy'
   pushd buoy >/dev/null
   ty check
   popd >/dev/null
 
-  header 'Type checking port'
+  _header 'Type checking port'
   pushd port >/dev/null
   ty check
   popd >/dev/null
 
-  header 'Running fmindexer cargo check'
+  _header 'Running fmindexer cargo check'
   pushd fmindexer.rs >/dev/null
   cargo check
   popd >/dev/null
@@ -89,6 +98,34 @@ check() {
 
 run-local() {
   docker compose up --build "$@"
+}
+
+index-seq() {
+  if [[ "$#" -ne 2 ]]; then
+    echo "Usage: $0 index-seq <length> <output.bin>" >&2
+    exit 1
+  fi
+
+  local output
+  output="$(_abspath "$2")"
+
+  pushd fmindexer.rs >/dev/null
+  cargo run -- build-sim <(python3 seqgen.py "$1") "$output"
+  popd >/dev/null
+}
+
+sim() {
+  if [[ "$#" -ne 1 ]]; then
+    echo "Usage: $0 sim <index.bin>" >&2
+    exit 1
+  fi
+
+  local index
+  index="$(_abspath "$1")"
+
+  pushd fmindex_sv >/dev/null
+  INDEX_BIN="$index" ./run.sh
+  popd >/dev/null
 }
 
 if [[ "$#" == 0 ]]; then
