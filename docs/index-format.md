@@ -1,7 +1,7 @@
 # `build-sim` output format
 
 The `build-sim` subcommand writes a binary FM-index file directly with
-[`FMIndex::write`](../src/fm_index.rs).
+[`FMIndex::write`](../fmindexer.rs/src/fm_index.rs).
 
 ## Command
 
